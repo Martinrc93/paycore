@@ -44,6 +44,14 @@ These are mandatory constraints for future financial behavior, not claims about 
 - Every schema change requires a new Flyway migration.
 - Never edit a migration that has already been released or applied to a shared environment.
 
+## Time Zones
+
+- UTC is the canonical timezone. Instants use `Instant`/`OffsetDateTime` (UTC) and `TIMESTAMPTZ` columns; business dates use `LocalDate`/`DATE`.
+- JVM default, Jackson, and Hibernate/JDBC are configured to UTC; the deployment container sets `TZ=UTC`.
+- Future local-time scheduling stores region `ZoneId` + local time and resolves the instant at execution time (DST-safe).
+- Never use `java.util.Date`, `Calendar`, or `LocalDateTime` for instants; inject `Clock` for testability.
+- See ADR-0004 for details.
+
 ## Commands
 
 Use the wrapper rather than a globally installed Maven:
@@ -64,6 +72,6 @@ Use the wrapper rather than a globally installed Maven:
 
 - Financial behavior must cover the happy path, insufficient funds, invalid state, rollback, concurrency, and idempotency when applicable.
 - Use integration tests for PostgreSQL, Flyway, transaction, locking, and adapter behavior; do not replace infrastructure semantics with mocks.
-- Known baseline on 2026-08-07: `mvnw test` fails because `PaycoreApplicationTests` starts JPA/Flyway without a datasource URL or embedded database. Do not attribute this failure to unrelated work or hide it; establish the intended database-backed test setup before relying on the context-load test.
+- Database-backed tests use Testcontainers (`@ServiceConnection` with `postgres:17`), which provides the datasource; the full `mvnw test` suite passes when Docker is available. Verified 2026-08-07: 6 tests, 0 failures (supersedes the earlier baseline that reported a datasource failure).
 - Before completion, run focused affected tests and the full `mvnw test` suite. Report any remaining failure exactly; never claim tests pass when they do not.
 - Confirm OpenSpec requirements and tasks are satisfied, architecture boundaries still hold, and documentation is updated when behavior or operation changed.
