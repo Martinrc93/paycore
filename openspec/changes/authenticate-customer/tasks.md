@@ -22,12 +22,12 @@
 
 ## 4. Keycloak OIDC and BFF Session Establishment
 
-- [ ] 4.1 Write failing security integration tests for login initiation, state/nonce/PKCE authorization parameters, callback success, callback failure, and session-id rotation.
-- [ ] 4.2 Configure PayCore as a confidential OIDC client using Authorization Code flow with PKCE and validate issuer, subject, nonce, and configured client/audience expectations.
-- [ ] 4.3 Adapt validated OIDC issuer and subject into the application access-resolution use case before an authenticated local session is accepted.
-- [ ] 4.4 Store the SecurityContext and OAuth authorized client only in server-side HttpSession and verify responses, cookies, logs, and browser-readable state do not expose access or refresh tokens.
-- [ ] 4.5 Configure `__Host-paycore-session` as Secure, HttpOnly, SameSite=Lax, Path=/, without Domain, and verify those attributes in integration tests.
-- [ ] 4.6 Configure server-side access-token refresh and test successful renewal plus session invalidation when Keycloak rejects or revokes the refresh token.
+- [x] 4.1 Write failing security integration tests for login initiation, state/nonce/PKCE authorization parameters, callback success, callback failure, and session-id rotation.
+- [x] 4.2 Configure PayCore as a confidential OIDC client using Authorization Code flow with PKCE and validate issuer, subject, nonce, and configured client/audience expectations.
+- [x] 4.3 Adapt validated OIDC issuer and subject into the application access-resolution use case before an authenticated local session is accepted.
+- [x] 4.4 Store the SecurityContext and OAuth authorized client only in server-side HttpSession and verify responses, cookies, logs, and browser-readable state do not expose access or refresh tokens.
+- [x] 4.5 Configure `__Host-paycore-session` as Secure, HttpOnly, SameSite=Lax, Path=/, without Domain, and verify those attributes in integration tests.
+- [x] 4.6 Configure server-side access-token refresh and test successful renewal plus session invalidation when Keycloak rejects or revokes the refresh token.
 
 ## 5. Session Lifetime and Customer Status Enforcement
 

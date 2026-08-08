@@ -16,9 +16,13 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.web.server.Cookie.SameSite;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.jwt.JwtDecoderFactory;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 
 class AuthenticationConfigurationTest {
@@ -29,9 +33,12 @@ class AuthenticationConfigurationTest {
 
     @Test
     void authenticationStaysDisabledWithoutContactingAnIssuer() {
-        contextRunner.run(context -> {
+        contextRunner.withUserConfiguration(AuthenticationSecurityConfiguration.class).run(context -> {
             assertThat(context).doesNotHaveBean(ClientRegistrationRepository.class);
-            assertThat(context).doesNotHaveBean(OAuth2AuthorizedClientService.class);
+            assertThat(context).doesNotHaveBean(OAuth2AuthorizedClientRepository.class);
+            assertThat(context).doesNotHaveBean(OAuth2AuthorizedClientManager.class);
+            assertThat(context).doesNotHaveBean(JwtDecoderFactory.class);
+            assertThat(context).doesNotHaveBean(SecurityFilterChain.class);
             assertThat(context.getEnvironment().getProperty("paycore.authentication.enabled", Boolean.class))
                     .isFalse();
         });
@@ -72,7 +79,6 @@ class AuthenticationConfigurationTest {
                                 .isEqualTo("{baseUrl}/standard/callback/{registrationId}");
                         assertThat(registration.getScopes()).containsExactly("openid", "profile");
                         assertThat(registration.getProviderDetails().getIssuerUri()).isEqualTo(issuer);
-                        assertThat(context).hasSingleBean(OAuth2AuthorizedClientService.class);
                         assertThat(session.getTimeout()).isEqualTo(Duration.ofMinutes(30));
                         assertThat(initializeSchema).isEqualTo(DatabaseInitializationMode.NEVER);
                         assertThat(cookie.getName()).isEqualTo("__Host-paycore-session");
@@ -102,6 +108,7 @@ class AuthenticationConfigurationTest {
             contextRunner.withPropertyValues(
                             "spring.profiles.active=integration-test",
                             "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=test-secret",
                             "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
                     .run(context -> {
                         assertThat(context).hasSingleBean(ClientRegistrationRepository.class);
@@ -121,6 +128,7 @@ class AuthenticationConfigurationTest {
         try {
             contextRunner.withPropertyValues(
                             "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=test-secret",
                             "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer,
                             "paycore.authentication.logout-path=https://issuer.example/logout")
                     .run(context -> {
@@ -129,6 +137,61 @@ class AuthenticationConfigurationTest {
                                 .isInstanceOf(IllegalArgumentException.class)
                                 .hasMessage("paycore.authentication.logout-path must be a local absolute path");
                     });
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsNonLocalSuccessUri() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=test-secret",
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer,
+                            "paycore.authentication.success-uri=//attacker.example/callback")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure()).rootCause()
+                                .isInstanceOf(IllegalArgumentException.class)
+                                .hasMessage("paycore.authentication.success-uri must be a local absolute path");
+                    });
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsEnabledAuthenticationWithoutAClientSecret() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=",
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
+                    .run(context -> assertThat(context).hasFailed());
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsPublicClientAuthentication() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=test-secret",
+                            "spring.security.oauth2.client.registration.paycore.client-authentication-method=none",
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
+                    .run(context -> assertThat(context).hasFailed());
         } finally {
             issuerServer.stop(0);
         }
@@ -155,7 +218,11 @@ class AuthenticationConfigurationTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties(ServerProperties.class)
-    @ComponentScan(basePackageClasses = AuthenticationConfigurationTest.class)
+    @ComponentScan(
+            basePackageClasses = AuthenticationConfigurationTest.class,
+            excludeFilters = @ComponentScan.Filter(
+                    type = FilterType.ASSIGNABLE_TYPE,
+                    classes = AuthenticationSecurityConfiguration.class))
     static class BoundProperties {
     }
 }

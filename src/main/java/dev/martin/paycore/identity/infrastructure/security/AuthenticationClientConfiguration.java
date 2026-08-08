@@ -7,8 +7,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.oauth2.client.InMemoryOAuth2AuthorizedClientService;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.registration.ClientRegistrations;
@@ -31,14 +29,18 @@ public class AuthenticationClientConfiguration {
                 ? registrationProperties.getProvider() : "paycore";
         OAuth2ClientProperties.Provider provider =
                 required(properties.getProvider().get(providerId), "provider " + providerId);
+        String clientAuthenticationMethod = valueOrDefault(
+                registrationProperties.getClientAuthenticationMethod(), "client_secret_basic");
+        if (!ClientAuthenticationMethod.CLIENT_SECRET_BASIC.getValue().equals(clientAuthenticationMethod)) {
+            throw new IllegalStateException("paycore must use client_secret_basic authentication");
+        }
 
         ClientRegistration.Builder builder = ClientRegistrations.fromIssuerLocation(
                         required(provider.getIssuerUri(), "provider issuer URI"))
                 .registrationId("paycore")
                 .clientId(required(registrationProperties.getClientId(), "client ID"))
-                .clientSecret(registrationProperties.getClientSecret())
-                .clientAuthenticationMethod(new ClientAuthenticationMethod(valueOrDefault(
-                        registrationProperties.getClientAuthenticationMethod(), "client_secret_basic")))
+                .clientSecret(required(registrationProperties.getClientSecret(), "client secret"))
+                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(new AuthorizationGrantType(required(
                         registrationProperties.getAuthorizationGrantType(), "authorization grant type")))
                 .redirectUri(required(registrationProperties.getRedirectUri(), "redirect URI"));
@@ -49,13 +51,6 @@ public class AuthenticationClientConfiguration {
             builder.clientName(registrationProperties.getClientName());
         }
         return new InMemoryClientRegistrationRepository(builder.build());
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    OAuth2AuthorizedClientService authorizedClientService(
-            ClientRegistrationRepository clientRegistrationRepository) {
-        return new InMemoryOAuth2AuthorizedClientService(clientRegistrationRepository);
     }
 
     private static <T> T required(T value, String name) {
@@ -74,8 +69,14 @@ public class AuthenticationClientConfiguration {
 record AuthenticationNavigationProperties(String successUri, String logoutPath) {
 
     AuthenticationNavigationProperties {
-        if (logoutPath == null || !logoutPath.startsWith("/") || logoutPath.startsWith("//")) {
-            throw new IllegalArgumentException("paycore.authentication.logout-path must be a local absolute path");
+        requireLocalPath(successUri, "success-uri");
+        requireLocalPath(logoutPath, "logout-path");
+    }
+
+    private static void requireLocalPath(String value, String property) {
+        if (value == null || !value.startsWith("/") || value.startsWith("//")) {
+            throw new IllegalArgumentException(
+                    "paycore.authentication." + property + " must be a local absolute path");
         }
     }
 }
