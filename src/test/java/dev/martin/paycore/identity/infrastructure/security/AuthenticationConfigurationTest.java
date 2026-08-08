@@ -17,8 +17,10 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.web.server.Cookie.SameSite;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties;
+import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
 
 class AuthenticationConfigurationTest {
 
@@ -37,13 +39,17 @@ class AuthenticationConfigurationTest {
     }
 
     @Test
-    void bindsEnabledAuthenticationAndSecureSessionDefaults() throws IOException {
+    void canonicalPropertyEnablesAuthenticationAndBindsOverrides() throws IOException {
         HttpServer issuerServer = startIssuerServer();
         String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
 
         try {
-            contextRunner.withSystemProperties("PAYCORE_AUTHENTICATION_ENABLED=true")
-                    .withPropertyValues("spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
+            contextRunner.withSystemProperties(
+                    "PAYCORE_OIDC_CLIENT_SECRET=overridden-client-secret",
+                    "PAYCORE_AUTHENTICATION_LOGOUT_PATH=/bff/auth/local-logout")
+                    .withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "paycore.authentication.issuer-uri=" + issuer)
                     .run(context -> {
                         var registrations = context.getBean(ClientRegistrationRepository.class);
                         var registration = registrations.findByRegistrationId("paycore");
@@ -57,6 +63,9 @@ class AuthenticationConfigurationTest {
                         assertThat(registration).isNotNull();
                         assertThat(registration.getRegistrationId()).isEqualTo("paycore");
                         assertThat(registration.getClientId()).isEqualTo("paycore-bff");
+                        assertThat(registration.getClientSecret()).isEqualTo("overridden-client-secret");
+                        assertThat(registration.getAuthorizationGrantType())
+                                .isEqualTo(AuthorizationGrantType.AUTHORIZATION_CODE);
                         assertThat(registration.getRedirectUri())
                                 .isEqualTo("{baseUrl}/login/oauth2/code/{registrationId}");
                         assertThat(registration.getScopes()).containsExactly("openid");
@@ -73,6 +82,49 @@ class AuthenticationConfigurationTest {
                                 .getProperty("paycore.authentication.enabled", Boolean.class)).isTrue();
                         assertThat(context.getEnvironment().getProperty("paycore.authentication.success-uri"))
                                 .isEqualTo("/");
+                        assertThat(context.getEnvironment().getProperty("paycore.authentication.logout-path"))
+                                .isEqualTo("/bff/auth/local-logout");
+                    });
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @Test
+    void authenticationCoexistsWithUnrelatedActiveProfile() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "spring.profiles.active=integration-test",
+                            "paycore.authentication.enabled=true",
+                            "paycore.authentication.issuer-uri=" + issuer)
+                    .run(context -> {
+                        assertThat(context).hasSingleBean(ClientRegistrationRepository.class);
+                        assertThat(context.getEnvironment().getActiveProfiles())
+                                .containsExactly("integration-test");
+                    });
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsNonLocalLogoutPath() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "paycore.authentication.issuer-uri=" + issuer,
+                            "paycore.authentication.logout-path=https://issuer.example/logout")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure()).rootCause()
+                                .isInstanceOf(IllegalArgumentException.class)
+                                .hasMessage("paycore.authentication.logout-path must be a local absolute path");
                     });
         } finally {
             issuerServer.stop(0);
@@ -100,6 +152,7 @@ class AuthenticationConfigurationTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties(ServerProperties.class)
+    @ComponentScan(basePackageClasses = AuthenticationConfigurationTest.class)
     static class BoundProperties {
     }
 }
