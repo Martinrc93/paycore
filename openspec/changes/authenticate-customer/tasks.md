@@ -7,10 +7,10 @@
 
 ## 2. Domain and Application Access Resolution
 
-- [ ] 2.1 Write failing unit tests for resolving a linked active Customer by exact issuer and subject, including identities with the same subject under different issuers.
-- [ ] 2.2 Write failing unit tests for unknown links and inactive Customers, ensuring mutable email claims are never used as identity keys.
-- [ ] 2.3 Introduce the minimal framework-free identity value objects, Customer access result, application input port, and persistence output port needed to satisfy the tests.
-- [ ] 2.4 Define a framework-free session-revocation output port for revoking the current session or all sessions of a Customer without leaking Spring Session types inward.
+- [x] 2.1 Write failing unit tests for resolving a linked active Customer by exact issuer and subject, including identities with the same subject under different issuers.
+- [x] 2.2 Write failing unit tests for unknown links and inactive Customers, ensuring mutable email claims are never used as identity keys.
+- [x] 2.3 Introduce the minimal framework-free identity value objects, Customer access result, application input port, and persistence output port needed to satisfy the tests.
+- [x] 2.4 Define a framework-free session-revocation output port for revoking the current session or all sessions of a Customer without leaking Spring Session types inward.
 
 ## 3. PostgreSQL Persistence and Sessions
 
