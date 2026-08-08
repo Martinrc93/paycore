@@ -20,9 +20,11 @@ class IdentityArchitectureTest {
     }
 
     @Test
-    void applicationDoesNotDependOnInfrastructure() {
+    void applicationDoesNotDependOnFrameworksOrInfrastructure() {
         noClasses().that().resideInAPackage("..identity.application..")
-                .should().dependOnClassesThat().resideInAPackage("..identity.infrastructure..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "org.springframework..", "jakarta.persistence..", "jakarta.servlet..",
+                        "org.keycloak..", "..identity.infrastructure..")
                 .check(classes);
     }
 }

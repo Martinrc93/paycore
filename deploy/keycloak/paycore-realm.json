@@ -51,6 +51,30 @@
       "redirectUris": [
         "${PAYCORE_REGISTRATION_REDIRECT_URI}"
       ]
+    },
+    {
+      "clientId": "paycore-bff",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "publicClient": false,
+      "secret": "${PAYCORE_OIDC_CLIENT_SECRET}",
+      "serviceAccountsEnabled": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/login/oauth2/code/paycore"
+      ],
+      "webOrigins": [
+        "http://localhost:8080"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "access.token.lifespan": "300",
+        "client.session.idle.timeout": "1800",
+        "client.session.max.lifespan": "28800"
+      }
     }
   ],
   "users": [
