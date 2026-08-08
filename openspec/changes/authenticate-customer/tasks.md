@@ -15,10 +15,10 @@
 ## 3. PostgreSQL Persistence and Sessions
 
 - [x] 3.1 Verify the existing V1 Flyway migration supplies the external identity link with uniqueness on `(issuer, subject)` and the Customer linkage owned by `register-customer` (verified 2026-08-08).
-- [ ] 3.2 Add a Flyway migration for the PostgreSQL Spring Session JDBC schema and required expiry/principal indexes; disable automatic session-schema initialization.
-- [ ] 3.3 Implement and integration-test the persistence adapter that resolves external identity and current Customer status using PostgreSQL Testcontainers.
-- [ ] 3.4 Configure Spring Session JDBC with a 30-minute idle timeout and principal indexing by stable local Customer identifier.
-- [ ] 3.5 Implement the session-revocation adapter and integration-test current-session revocation, all-session revocation, independent concurrent sessions, repository-level absolute expiration, and expired-row/token cleanup.
+- [x] 3.2 Add a Flyway migration for the PostgreSQL Spring Session JDBC schema and required expiry/principal indexes; disable automatic session-schema initialization.
+- [x] 3.3 Implement and integration-test the persistence adapter that resolves external identity and current Customer status using PostgreSQL Testcontainers.
+- [x] 3.4 Configure Spring Session JDBC with a 30-minute idle timeout and principal indexing by stable local Customer identifier.
+- [x] 3.5 Implement the session-revocation adapter and integration-test current-session revocation, all-session revocation, independent concurrent sessions, repository-level absolute expiration, and expired-row/token cleanup.
 
 ## 4. Keycloak OIDC and BFF Session Establishment
 
