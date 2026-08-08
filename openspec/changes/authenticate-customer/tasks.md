@@ -31,12 +31,12 @@
 
 ## 5. Session Lifetime and Customer Status Enforcement
 
-- [ ] 5.1 Write failing tests with an injected Clock for 30-minute idle expiration, fixed 8-hour expiration measured from successful authentication, and the rule that token refresh does not extend absolute lifetime.
-- [ ] 5.2 Enforce absolute expiration before protected request processing and cap repository inactivity expiry to the remaining absolute lifetime so stored sessions cannot remain active past the deadline.
-- [ ] 5.3 Add tests proving Customer status is reloaded on every protected request, the first inactive request returns HTTP 403, and reuse after revocation returns HTTP 401.
-- [ ] 5.4 Revalidate Customer status through the application boundary on every protected request and revoke all indexed sessions when an inactive Customer is detected.
-- [ ] 5.5 Wire the Customer status-transition use case to the session-revocation port so suspension or blocking proactively removes every indexed Customer session.
-- [ ] 5.6 Add integration tests for proactive status-transition revocation and concurrent protected requests racing with suspension.
+- [x] 5.1 Write failing tests with an injected Clock for 30-minute idle expiration, fixed 8-hour expiration measured from successful authentication, and the rule that token refresh does not extend absolute lifetime.
+- [x] 5.2 Enforce absolute expiration before protected request processing and cap repository inactivity expiry to the remaining absolute lifetime so stored sessions cannot remain active past the deadline.
+- [x] 5.3 Add tests proving Customer status is reloaded on every protected request, the first inactive request returns HTTP 403, and reuse after revocation returns HTTP 401.
+- [x] 5.4 Revalidate Customer status through the application boundary on every protected request and revoke all indexed sessions when an inactive Customer is detected.
+- [x] 5.5 Wire the Customer status-transition use case to the session-revocation port so suspension or blocking proactively removes every indexed Customer session.
+- [x] 5.6 Add integration tests for proactive status-transition revocation and concurrent protected requests racing with suspension.
 
 ## 6. Browser Security and Logout
 

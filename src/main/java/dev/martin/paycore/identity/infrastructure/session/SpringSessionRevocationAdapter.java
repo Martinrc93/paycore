@@ -2,25 +2,29 @@ package dev.martin.paycore.identity.infrastructure.session;
 
 import dev.martin.paycore.identity.application.port.out.SessionRevocationPort;
 import dev.martin.paycore.identity.domain.model.CustomerId;
-import org.springframework.session.jdbc.JdbcIndexedSessionRepository;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
 @Component
 public class SpringSessionRevocationAdapter implements SessionRevocationPort {
 
-    private final JdbcIndexedSessionRepository repository;
+    private final JdbcClient jdbcClient;
 
-    public SpringSessionRevocationAdapter(JdbcIndexedSessionRepository repository) {
-        this.repository = repository;
+    public SpringSessionRevocationAdapter(JdbcClient jdbcClient) {
+        this.jdbcClient = jdbcClient;
     }
 
     @Override
     public void revokeCurrent(String sessionId) {
-        repository.deleteById(sessionId);
+        jdbcClient.sql("DELETE FROM spring_session WHERE session_id = :sessionId")
+                .param("sessionId", sessionId)
+                .update();
     }
 
     @Override
     public void revokeAll(CustomerId customerId) {
-        repository.findByPrincipalName(customerId.value().toString()).keySet().forEach(repository::deleteById);
+        jdbcClient.sql("DELETE FROM spring_session WHERE principal_name = :principalName")
+                .param("principalName", customerId.value().toString())
+                .update();
     }
 }

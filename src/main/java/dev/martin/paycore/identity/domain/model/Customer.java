@@ -39,9 +39,25 @@ public final class Customer {
         transitionTo(CustomerStatus.PROVISIONING_FAILED, now);
     }
 
+    public void suspend(Instant now) {
+        transitionActiveTo(CustomerStatus.SUSPENDED, now);
+    }
+
+    public void block(Instant now) {
+        transitionActiveTo(CustomerStatus.BLOCKED, now);
+    }
+
     private void transitionTo(CustomerStatus target, Instant now) {
         if (status != CustomerStatus.PROVISIONING) {
             throw new IllegalStateException("Customer registration is no longer provisioning");
+        }
+        status = target;
+        updatedAt = Objects.requireNonNull(now, "now");
+    }
+
+    private void transitionActiveTo(CustomerStatus target, Instant now) {
+        if (status != CustomerStatus.ACTIVE) {
+            throw new IllegalStateException("Customer is not active");
         }
         status = target;
         updatedAt = Objects.requireNonNull(now, "now");

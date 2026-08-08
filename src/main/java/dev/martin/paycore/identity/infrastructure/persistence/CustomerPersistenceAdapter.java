@@ -21,6 +21,15 @@ public class CustomerPersistenceAdapter implements CustomerRepository {
         return repository.findById(customerId.value()).map(CustomerPersistenceAdapter::toDomain);
     }
 
+    @Override
+    public void save(Customer customer) {
+        CustomerEntity entity = repository.findById(customer.id().value())
+                .orElseThrow(() -> new IllegalStateException("Customer disappeared during status change"));
+        entity.status = customer.status();
+        entity.updatedAt = customer.updatedAt();
+        repository.save(entity);
+    }
+
     private static Customer toDomain(CustomerEntity entity) {
         return Customer.rehydrate(new CustomerId(entity.id), Email.of(entity.email), entity.type,
                 entity.status, entity.createdAt, entity.updatedAt);

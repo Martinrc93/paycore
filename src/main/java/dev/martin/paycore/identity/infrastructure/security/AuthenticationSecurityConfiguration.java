@@ -3,9 +3,12 @@ package dev.martin.paycore.identity.infrastructure.security;
 import dev.martin.paycore.identity.application.authentication.CustomerAccess;
 import dev.martin.paycore.identity.application.authentication.ResolveCustomerAccess;
 import dev.martin.paycore.identity.application.authentication.ResolveCustomerAccessService;
+import dev.martin.paycore.identity.application.authentication.SessionLifetimePolicy;
 import dev.martin.paycore.identity.application.port.out.CustomerAccessRepository;
+import dev.martin.paycore.identity.application.port.out.SessionRevocationPort;
 import dev.martin.paycore.identity.domain.model.ExternalIdentity;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.time.Clock;
@@ -39,6 +42,7 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.oauth2.jwt.JwtDecoderFactory;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.session.web.http.CookieSerializer;
@@ -52,6 +56,11 @@ public class AuthenticationSecurityConfiguration {
     @ConditionalOnMissingBean
     ResolveCustomerAccess resolveCustomerAccess(CustomerAccessRepository repository) {
         return new ResolveCustomerAccessService(repository);
+    }
+
+    @Bean
+    SessionLifetimePolicy sessionLifetimePolicy(Clock clock) {
+        return new SessionLifetimePolicy(clock);
     }
 
     @Bean
@@ -95,6 +104,12 @@ public class AuthenticationSecurityConfiguration {
         manager.setAuthorizedClientProvider(refreshProvider);
         manager.setAuthorizationFailureHandler((exception, authentication, attributes) -> {
             HttpServletRequest request = (HttpServletRequest) attributes.get(HttpServletRequest.class.getName());
+            HttpServletResponse response = (HttpServletResponse) attributes.get(HttpServletResponse.class.getName());
+            if (request != null && response != null
+                    && authentication instanceof OAuth2AuthenticationToken oauth2Authentication) {
+                authorizedClients.removeAuthorizedClient(
+                        oauth2Authentication.getAuthorizedClientRegistrationId(), authentication, request, response);
+            }
             HttpSession session = request == null ? null : request.getSession(false);
             if (session != null) {
                 session.invalidate();
@@ -105,20 +120,26 @@ public class AuthenticationSecurityConfiguration {
 
     @Bean
     CustomerOidcAuthenticationSuccessHandler customerOidcAuthenticationSuccessHandler(
-            Clock clock, AuthenticationNavigationProperties navigation) {
-        return new CustomerOidcAuthenticationSuccessHandler(clock, navigation.successUri());
+            Clock clock, SessionLifetimePolicy lifetimePolicy, AuthenticationNavigationProperties navigation) {
+        return new CustomerOidcAuthenticationSuccessHandler(clock, lifetimePolicy, navigation.successUri());
     }
 
     @Bean
     SecurityFilterChain authenticationSecurityFilterChain(HttpSecurity http,
             ClientRegistrationRepository registrations,
             OAuth2AuthorizedClientRepository authorizedClients,
+            OAuth2AuthorizedClientManager authorizedClientManager,
             SecurityContextRepository securityContexts,
             ResolveCustomerAccess customerAccess,
+            SessionRevocationPort sessions,
+            SessionLifetimePolicy lifetimePolicy,
             CustomerOidcAuthenticationSuccessHandler successHandler) throws Exception {
         DefaultOAuth2AuthorizationRequestResolver authorizationRequests =
                 new DefaultOAuth2AuthorizationRequestResolver(registrations);
         authorizationRequests.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());
+        SessionLifetimeFilter lifetimeFilter = new SessionLifetimeFilter(lifetimePolicy);
+        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, sessions);
+        OAuth2RefreshFilter refreshFilter = new OAuth2RefreshFilter(authorizedClientManager, authorizedClients);
 
         http.authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.POST, "/api/customers").permitAll()
@@ -127,6 +148,9 @@ public class AuthenticationSecurityConfiguration {
                 .csrf(csrf -> csrf.ignoringRequestMatchers("/api/customers"))
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, exception) ->
+                                SecurityResponses.unauthorized(response)))
                 .securityContext(context -> context.securityContextRepository(securityContexts))
                 .sessionManagement(session -> session.sessionFixation(fixation -> fixation.changeSessionId()))
                 .oauth2Login(oauth2 -> oauth2
@@ -143,7 +167,10 @@ public class AuthenticationSecurityConfiguration {
                                         localAuthentication(authentication, customerAccess));
                                 return filter;
                             }
-                        }));
+                        }))
+                .addFilterAfter(lifetimeFilter, SecurityContextHolderFilter.class)
+                .addFilterAfter(statusFilter, SessionLifetimeFilter.class)
+                .addFilterAfter(refreshFilter, CustomerStatusFilter.class);
         return http.build();
     }
 
