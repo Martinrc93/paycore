@@ -56,6 +56,7 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -71,6 +72,7 @@ import org.springframework.session.Session;
 import org.springframework.session.jdbc.JdbcIndexedSessionRepository;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -128,6 +130,9 @@ class OidcLoginSecurityTest {
     @Autowired
     OAuth2AuthorizedClientManager authorizedClientManager;
 
+    @Autowired
+    ApplicationContext applicationContext;
+
     @BeforeEach
     void resetState() {
         jdbcClient.sql("TRUNCATE TABLE spring_session CASCADE").update();
@@ -151,6 +156,11 @@ class OidcLoginSecurityTest {
         assertThat(parameters.get("code_challenge")).isNotBlank();
         assertThat(parameters.get("code_challenge_method")).isEqualTo("S256");
         assertNoTokens(result);
+    }
+
+    @Test
+    void enabledAuthenticationHasNoApplicationGlobalAuthorizedClientService() {
+        assertThat(applicationContext.getBeansOfType(OAuth2AuthorizedClientService.class)).isEmpty();
     }
 
     @Test

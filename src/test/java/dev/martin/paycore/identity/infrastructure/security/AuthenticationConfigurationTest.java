@@ -1,6 +1,7 @@
 package dev.martin.paycore.identity.infrastructure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -8,6 +9,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.sql.init.DatabaseInitializationMode;
@@ -195,6 +198,56 @@ class AuthenticationConfigurationTest {
         } finally {
             issuerServer.stop(0);
         }
+    }
+
+    @Test
+    void rejectsNonAuthorizationCodeGrant() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=test-secret",
+                            "spring.security.oauth2.client.registration.paycore.authorization-grant-type=client_credentials",
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
+                    .run(context -> assertThat(context).hasFailed());
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsRegistrationWithoutOpenidScope() throws IOException {
+        HttpServer issuerServer = startIssuerServer();
+        String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
+
+        try {
+            contextRunner.withPropertyValues(
+                            "paycore.authentication.enabled=true",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=test-secret",
+                            "spring.security.oauth2.client.registration.paycore.scope=profile,email",
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
+                    .run(context -> assertThat(context).hasFailed());
+        } finally {
+            issuerServer.stop(0);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/\\attacker.example",
+            "https://attacker.example/callback",
+            "/%2f%2fattacker.example",
+            "/%5c%5cattacker.example",
+            "/signed-in?next=https://attacker.example",
+            "/signed-in#https://attacker.example",
+            "/signed-in\r\nLocation:https://attacker.example"
+    })
+    void rejectsSuccessUriThatIsNotAPlainSameSitePath(String successUri) {
+        assertThatThrownBy(() -> new AuthenticationNavigationProperties(successUri, "/bff/auth/logout"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("paycore.authentication.success-uri must be a local absolute path");
     }
 
     private static HttpServer startIssuerServer() throws IOException {

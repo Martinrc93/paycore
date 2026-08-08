@@ -1,5 +1,8 @@
 package dev.martin.paycore.identity.infrastructure.security;
 
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.Set;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -34,6 +37,15 @@ public class AuthenticationClientConfiguration {
         if (!ClientAuthenticationMethod.CLIENT_SECRET_BASIC.getValue().equals(clientAuthenticationMethod)) {
             throw new IllegalStateException("paycore must use client_secret_basic authentication");
         }
+        String authorizationGrantType = required(
+                registrationProperties.getAuthorizationGrantType(), "authorization grant type");
+        if (!AuthorizationGrantType.AUTHORIZATION_CODE.getValue().equals(authorizationGrantType)) {
+            throw new IllegalStateException("paycore must use authorization_code grant");
+        }
+        Set<String> scopes = required(registrationProperties.getScope(), "scope");
+        if (!scopes.contains("openid")) {
+            throw new IllegalStateException("paycore scope must include openid");
+        }
 
         ClientRegistration.Builder builder = ClientRegistrations.fromIssuerLocation(
                         required(provider.getIssuerUri(), "provider issuer URI"))
@@ -41,12 +53,9 @@ public class AuthenticationClientConfiguration {
                 .clientId(required(registrationProperties.getClientId(), "client ID"))
                 .clientSecret(required(registrationProperties.getClientSecret(), "client secret"))
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
-                .authorizationGrantType(new AuthorizationGrantType(required(
-                        registrationProperties.getAuthorizationGrantType(), "authorization grant type")))
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .redirectUri(required(registrationProperties.getRedirectUri(), "redirect URI"));
-        if (registrationProperties.getScope() != null) {
-            builder.scope(registrationProperties.getScope());
-        }
+        builder.scope(scopes);
         if (StringUtils.hasText(registrationProperties.getClientName())) {
             builder.clientName(registrationProperties.getClientName());
         }
@@ -74,9 +83,25 @@ record AuthenticationNavigationProperties(String successUri, String logoutPath) 
     }
 
     private static void requireLocalPath(String value, String property) {
-        if (value == null || !value.startsWith("/") || value.startsWith("//")) {
+        if (!isPlainLocalPath(value)) {
             throw new IllegalArgumentException(
                     "paycore.authentication." + property + " must be a local absolute path");
+        }
+    }
+
+    private static boolean isPlainLocalPath(String value) {
+        if (value == null || !value.startsWith("/") || value.startsWith("//")
+                || value.indexOf('\\') >= 0 || value.indexOf('%') >= 0
+                || value.chars().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(value);
+            return !uri.isAbsolute() && uri.getRawAuthority() == null
+                    && uri.getRawQuery() == null && uri.getRawFragment() == null
+                    && value.equals(uri.getRawPath());
+        } catch (URISyntaxException exception) {
+            return false;
         }
     }
 }
