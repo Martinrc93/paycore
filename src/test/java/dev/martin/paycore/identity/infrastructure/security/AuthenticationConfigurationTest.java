@@ -8,10 +8,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
-import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientAutoConfiguration;
 import org.springframework.boot.sql.init.DatabaseInitializationMode;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -19,6 +17,7 @@ import org.springframework.boot.web.server.Cookie.SameSite;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 
@@ -26,13 +25,13 @@ class AuthenticationConfigurationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withInitializer(new ConfigDataApplicationContextInitializer())
-            .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class))
             .withUserConfiguration(BoundProperties.class);
 
     @Test
     void authenticationStaysDisabledWithoutContactingAnIssuer() {
         contextRunner.run(context -> {
             assertThat(context).doesNotHaveBean(ClientRegistrationRepository.class);
+            assertThat(context).doesNotHaveBean(OAuth2AuthorizedClientService.class);
             assertThat(context.getEnvironment().getProperty("paycore.authentication.enabled", Boolean.class))
                     .isFalse();
         });
@@ -44,12 +43,15 @@ class AuthenticationConfigurationTest {
         String issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
 
         try {
-            contextRunner.withSystemProperties(
-                    "PAYCORE_OIDC_CLIENT_SECRET=overridden-client-secret",
-                    "PAYCORE_AUTHENTICATION_LOGOUT_PATH=/bff/auth/local-logout")
+            contextRunner.withSystemProperties("PAYCORE_AUTHENTICATION_LOGOUT_PATH=/bff/auth/local-logout")
                     .withPropertyValues(
                             "paycore.authentication.enabled=true",
-                            "paycore.authentication.issuer-uri=" + issuer)
+                            "spring.security.oauth2.client.registration.paycore.client-id=standard-client-id",
+                            "spring.security.oauth2.client.registration.paycore.client-secret=standard-client-secret",
+                            "spring.security.oauth2.client.registration.paycore.authorization-grant-type=authorization_code",
+                            "spring.security.oauth2.client.registration.paycore.redirect-uri={baseUrl}/standard/callback/{registrationId}",
+                            "spring.security.oauth2.client.registration.paycore.scope=openid,profile",
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
                     .run(context -> {
                         var registrations = context.getBean(ClientRegistrationRepository.class);
                         var registration = registrations.findByRegistrationId("paycore");
@@ -62,14 +64,15 @@ class AuthenticationConfigurationTest {
 
                         assertThat(registration).isNotNull();
                         assertThat(registration.getRegistrationId()).isEqualTo("paycore");
-                        assertThat(registration.getClientId()).isEqualTo("paycore-bff");
-                        assertThat(registration.getClientSecret()).isEqualTo("overridden-client-secret");
+                        assertThat(registration.getClientId()).isEqualTo("standard-client-id");
+                        assertThat(registration.getClientSecret()).isEqualTo("standard-client-secret");
                         assertThat(registration.getAuthorizationGrantType())
                                 .isEqualTo(AuthorizationGrantType.AUTHORIZATION_CODE);
                         assertThat(registration.getRedirectUri())
-                                .isEqualTo("{baseUrl}/login/oauth2/code/{registrationId}");
-                        assertThat(registration.getScopes()).containsExactly("openid");
+                                .isEqualTo("{baseUrl}/standard/callback/{registrationId}");
+                        assertThat(registration.getScopes()).containsExactly("openid", "profile");
                         assertThat(registration.getProviderDetails().getIssuerUri()).isEqualTo(issuer);
+                        assertThat(context).hasSingleBean(OAuth2AuthorizedClientService.class);
                         assertThat(session.getTimeout()).isEqualTo(Duration.ofMinutes(30));
                         assertThat(initializeSchema).isEqualTo(DatabaseInitializationMode.NEVER);
                         assertThat(cookie.getName()).isEqualTo("__Host-paycore-session");
@@ -99,7 +102,7 @@ class AuthenticationConfigurationTest {
             contextRunner.withPropertyValues(
                             "spring.profiles.active=integration-test",
                             "paycore.authentication.enabled=true",
-                            "paycore.authentication.issuer-uri=" + issuer)
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer)
                     .run(context -> {
                         assertThat(context).hasSingleBean(ClientRegistrationRepository.class);
                         assertThat(context.getEnvironment().getActiveProfiles())
@@ -118,7 +121,7 @@ class AuthenticationConfigurationTest {
         try {
             contextRunner.withPropertyValues(
                             "paycore.authentication.enabled=true",
-                            "paycore.authentication.issuer-uri=" + issuer,
+                            "spring.security.oauth2.client.provider.paycore.issuer-uri=" + issuer,
                             "paycore.authentication.logout-path=https://issuer.example/logout")
                     .run(context -> {
                         assertThat(context).hasFailed();

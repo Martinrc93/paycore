@@ -58,11 +58,13 @@
   server.servlet.session.cookie.http-only=true
   server.servlet.session.cookie.same-site=lax
   server.servlet.session.cookie.path=/
+  spring.security.oauth2.client.registration.paycore.client-id=${PAYCORE_OIDC_CLIENT_ID:paycore-bff}
+  spring.security.oauth2.client.registration.paycore.client-secret=${PAYCORE_OIDC_CLIENT_SECRET:}
+  spring.security.oauth2.client.registration.paycore.authorization-grant-type=authorization_code
+  spring.security.oauth2.client.registration.paycore.redirect-uri=${PAYCORE_OIDC_REDIRECT_URI:{baseUrl}/login/oauth2/code/{registrationId}}
+  spring.security.oauth2.client.registration.paycore.scope=openid
+  spring.security.oauth2.client.provider.paycore.issuer-uri=${PAYCORE_OIDC_ISSUER_URI:http://localhost:8081/realms/paycore}
   paycore.authentication.enabled=${PAYCORE_AUTHENTICATION_ENABLED:false}
-  paycore.authentication.client-id=${PAYCORE_OIDC_CLIENT_ID:paycore-bff}
-  paycore.authentication.client-secret=${PAYCORE_OIDC_CLIENT_SECRET:}
-  paycore.authentication.redirect-uri=${PAYCORE_OIDC_REDIRECT_URI:{baseUrl}/login/oauth2/code/{registrationId}}
-  paycore.authentication.issuer-uri=${PAYCORE_OIDC_ISSUER_URI:http://localhost:8081/realms/paycore}
   paycore.authentication.success-uri=${PAYCORE_AUTHENTICATION_SUCCESS_URI:/}
   paycore.authentication.logout-path=${PAYCORE_AUTHENTICATION_LOGOUT_PATH:/bff/auth/logout}
   ```
