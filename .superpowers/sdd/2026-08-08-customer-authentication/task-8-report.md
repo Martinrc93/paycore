@@ -2,9 +2,9 @@
 
 ## Status
 
-- Status: PASS after Fix Round 1.
-- OpenSpec: 38/38 tasks complete after the independent review's four Important findings were resolved and affected/full verification was rerun.
-- Review verdict: `.superpowers/sdd/2026-08-08-customer-authentication/task-8-review.md` found four Important completion-gate findings; Fix Round 1 resolved all four with no open Critical, Important, or Medium finding.
+- Status: SCRATCH; superseded by `docs/verification/customer-authentication-task-8.md` after Fix Round 2.
+- OpenSpec: durable 38/38 evidence is tracked under `docs/verification` and `docs/reviews`.
+- Review verdict: Fix Round 1 addressed build portability, warnings, and scanner auditability, but independent fix re-review 1 left chronology and durability open; Fix Round 2 prepares those resolutions without claiming an independent re-review of this round.
 - Branch: `feature/authenticate-customer`.
 - Baseline reviewed: `c886f6f` through the Task 8 working tree.
 - Commit: Task 8 commit message `test: completar verificacion de autenticacion`; the immutable SHA is reported by the creating session and available from `git log -1`.
@@ -141,11 +141,11 @@ No usable credential is present in `deploy/keycloak/paycore-realm.json`, applica
 
 ### Independent Review Resolution
 
-The independent `task-8-review.md` was created after the initial Task 8 commit and found four Important issues: premature self-certification of 8.4, an unquoted Mockito agent path, unresolved unchecked compiler warnings, and non-reproducible secret-scan evidence. Task 8.4 was reopened to 37/38 before changes. The four findings were resolved in this round, affected and full tests were rerun, and only then was 8.4 restored to 38/38.
+The independent `task-8-review.md` was created after the initial Task 8 commit and found four Important issues: premature self-certification of 8.4, an unquoted Mockito agent path, unresolved unchecked compiler warnings, and non-reproducible secret-scan evidence. Fix Round 1 corrected the three technical findings and reran affected/full verification, but restored 8.4 before an independent fix re-review verdict existed; Fix Round 2 corrects that chronology.
 
 | Independent finding | Resolution | Verdict |
 | --- | --- | --- |
-| 1. Independent review gate self-certified early | OpenSpec 8.4 was reopened; this report and 8.4 now cite `task-8-review.md`, its four findings, this resolution round, and fresh affected/full evidence | RESOLVED |
+| 1. Independent review gate self-certified early | Fix Round 1 attempted to reopen/restore 8.4, but independent fix re-review 1 later judged the chronology not addressed | OPEN AFTER FIX ROUND 1 |
 | 2. Mockito agent path fails when Maven repository path contains spaces | Surefire now retains `@{argLine}` and quotes only the resolved agent filesystem path: `-javaagent:"${org.mockito:mockito-core:jar}"` | RESOLVED |
 | 3. Branch-attributable unchecked compiler noise | Managed Compiler Plugin `-Xlint:unchecked` identified two OIDC validator generic-varargs warnings; validator composition now uses `DelegatingOAuth2TokenValidator(Collection)` without suppression | RESOLVED |
 | 4. Secret scans were not reproducible | Added `scan-task-8-secrets.ps1`, a count-only scanner over added lines in the complete `git diff c886f6f`; exact rules, commands, classifications, output, and exit status are below | RESOLVED |
@@ -220,3 +220,18 @@ Suspicious-literal command and count-only output:
 ```
 
 Classification: deployment placeholders are environment substitutions, deployment literals are non-secret lifetime/property names, production-source matches are identifiers or fixed sanitized event/error vocabulary, test fixtures are explicitly disposable container/fake sentinels, documentation/spec matches are requirements and operational guidance, and scanner-rule matches are the auditable ruleset itself. No real credential was found; no candidate value is reproduced here.
+
+## Fix Round 2
+
+Independent fix re-review 1 occurred after commit `b3f9492`. It judged Mockito path portability, unchecked-warning removal, and scanner auditability addressed; it judged the 8.4 chronology not addressed and raised an Important durability finding because OpenSpec evidence and the scanner lived under disposable `.superpowers/sdd` paths.
+
+Fix Round 2 prepares the following resolution after that re-review existed:
+
+- `docs/verification/customer-authentication-task-8.md` is the durable authoritative report with exact commands/totals, all 21 scenarios, ADR/migration/security evidence, both review rounds, and exact durable scanner output.
+- `docs/reviews/customer-authentication-task-8.md` preserves the initial review and first re-review chronology/verdicts.
+- `scripts/scan-customer-authentication-secrets.ps1` is the tracked scanner; the tracked scanner copy under this disposable directory is removed.
+- OpenSpec 8.1-8.4 and the tracked implementation plan cite durable paths only.
+- 8.4 closes only now, after independent fix re-review 1 existed. Fix Round 2 has not yet been independently re-reviewed.
+- No application, test, Maven, deployment, or runtime behavior changed, so the fresh prior 40-test affected run, 191-test clean full run, and 9-test path-with-spaces regression were retained rather than rerun. Durable scans, strict OpenSpec validation, and diff checks are rerun for this round.
+
+This file remains scratch evidence and may be deleted with the SDD workspace without invalidating OpenSpec completion.

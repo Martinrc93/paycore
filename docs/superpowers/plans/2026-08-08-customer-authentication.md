@@ -303,6 +303,9 @@
 
 **Files:**
 - Modify: `openspec/changes/authenticate-customer/tasks.md`
+- Create: `docs/verification/customer-authentication-task-8.md`
+- Create: `docs/reviews/customer-authentication-task-8.md`
+- Create: `scripts/scan-customer-authentication-secrets.ps1`
 
 **Interfaces:**
 - Consumes: all prior deliverables.
@@ -310,24 +313,24 @@
 
 - [ ] **Step 1: Run focused tests**
 
-  Run all domain/application authentication tests, PostgreSQL session/persistence tests, Spring Security tests, Keycloak contract tests, and `IdentityArchitectureTest`. Record exact test totals in OpenSpec task 8.1.
+  Run all domain/application authentication tests, PostgreSQL session/persistence tests, Spring Security tests, Keycloak contract tests, and `IdentityArchitectureTest`. Record exact commands and totals in `docs/verification/customer-authentication-task-8.md`, then cite that durable report from OpenSpec task 8.1.
 
 - [ ] **Step 2: Run the full suite**
 
   Run: `.\mvnw.cmd test`
 
-  Expected: all tests pass with 0 failures, 0 errors, and 0 skipped. Record the exact total in task 8.2.
+  Expected: all tests pass with 0 failures, 0 errors, and 0 skipped. Record the exact total in the durable verification report and cite it from task 8.2.
 
 - [ ] **Step 3: Validate requirements and architecture**
 
   Run: `openspec validate "authenticate-customer"`
 
-  Review each scenario in `specs/identity/customer-authentication/spec.md`, ADR-0001, ADR-0002, ADR-0004, migration ordering, and all 38 tasks. Mark 8.3 only when each has implementation or test evidence.
+  Review each scenario in `specs/identity/customer-authentication/spec.md`, ADR-0001, ADR-0002, ADR-0004, migration ordering, and all 38 tasks. Preserve the evidence in the durable verification report and mark 8.3 only when each has implementation or test evidence.
 
 - [ ] **Step 4: Run independent security review**
 
-  Review credential/token leakage, session fixation, CSRF bypass, cross-session tokens, cookie scope, refresh rejection, absolute lifetime, status races, privilege boundaries, logs, metrics, and failure disclosure. Resolve every Critical, Important, or Medium finding and rerun affected plus full tests before marking 8.4.
+  Review credential/token leakage, session fixation, CSRF bypass, cross-session tokens, cookie scope, refresh rejection, absolute lifetime, status races, privilege boundaries, logs, metrics, and failure disclosure. Preserve independent verdicts and chronology in `docs/reviews/customer-authentication-task-8.md`; resolve every Critical, Important, or Medium finding and rerun affected plus full tests after code/config changes before marking 8.4.
 
 - [ ] **Step 5: Inspect final repository state**
 
-  Run `git status --short`, `git diff --check`, and inspect the complete diff. Keep the branch uncommitted unless the user explicitly requests a commit.
+  Run the durable strong/suspicious scanner, `git status --short`, `git diff --check`, and inspect the complete diff. Keep the branch uncommitted unless the user explicitly requests a commit.

@@ -65,7 +65,7 @@ foreach ($line in $diff) {
     if ($value -notmatch $suspiciousPattern) {
         continue
     }
-    if ($file -eq ".superpowers/sdd/2026-08-08-customer-authentication/scan-task-8-secrets.ps1") {
+    if ($file -eq "scripts/scan-customer-authentication-secrets.ps1") {
         $suspiciousCounts.scanner_rules++
     } elseif ($file -match '^(docs/|openspec/|\.superpowers/)') {
         $suspiciousCounts.documentation_or_spec++
