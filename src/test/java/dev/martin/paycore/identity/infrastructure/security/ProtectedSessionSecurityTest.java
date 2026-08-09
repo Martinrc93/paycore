@@ -2,6 +2,7 @@ package dev.martin.paycore.identity.infrastructure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import dev.martin.paycore.testsupport.ProtectedSecurityTestConfiguration;
@@ -14,6 +15,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -33,8 +35,6 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
-import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
-import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -72,6 +72,9 @@ public class ProtectedSessionSecurityTest {
 
     @Autowired
     JdbcIndexedSessionRepository sessions;
+
+    @Autowired
+    FindByIndexNameSessionRepository<Session> exactSessions;
 
     @Autowired
     JdbcClient jdbcClient;
@@ -122,6 +125,43 @@ public class ProtectedSessionSecurityTest {
     }
 
     @Test
+    void fractionalAbsoluteLifetimeIsPersistedAtTheExactDeadlineWithoutEarlyExpiry() throws Exception {
+        insertCustomer(CUSTOMER_ID, CustomerStatus.ACTIVE);
+        Session session = authenticatedSession(CUSTOMER_ID,
+                NOW.minus(Duration.ofHours(7)).minus(Duration.ofMinutes(50)).minusMillis(500));
+
+        assertThat(perform(sessionCookie(session)).getResponse().getStatus()).isEqualTo(200);
+
+        Map<String, Long> persisted = jdbcClient.sql("""
+                        SELECT max_inactive_interval, expiry_time
+                        FROM spring_session
+                        WHERE session_id = :id
+                        """)
+                .param("id", session.getId())
+                .query((rs, rowNum) -> Map.of(
+                        "maxInactiveInterval", rs.getLong("max_inactive_interval"),
+                        "expiryTime", rs.getLong("expiry_time")))
+                .single();
+        assertThat(persisted.get("maxInactiveInterval")).isEqualTo(600L);
+        assertThat(persisted.get("expiryTime"))
+                .isEqualTo(Instant.parse("2026-08-08T18:09:59.500Z").toEpochMilli());
+    }
+
+    @Test
+    void repositoryRejectsTheSessionAtItsFractionalAbsoluteDeadline() {
+        Instant authenticatedAt = NOW.minus(Duration.ofHours(8)).plusMillis(500);
+        Session session = exactSessions.createSession();
+        session.setAttribute(CustomerOidcAuthenticationSuccessHandler.AUTHENTICATED_AT_ATTRIBUTE, authenticatedAt);
+        exactSessions.save(session);
+        assertThat(exactSessions.findById(session.getId())).isNotNull();
+
+        clock.set(NOW.plusMillis(500));
+
+        assertThat(exactSessions.findById(session.getId())).isNull();
+        assertThat(sessions.findById(session.getId())).isNull();
+    }
+
+    @Test
     void absoluteExpiryRunsBeforeStatusAndRefreshAndReturnsSanitizedUnauthorized() throws Exception {
         insertCustomer(CUSTOMER_ID, CustomerStatus.SUSPENDED);
         Session session = authenticatedSession(CUSTOMER_ID, NOW.minus(Duration.ofHours(8)));
@@ -134,15 +174,89 @@ public class ProtectedSessionSecurityTest {
     }
 
     @Test
-    void thirtyIdleMinutesMakesThePersistedSessionUnauthenticated() throws Exception {
-        insertCustomer(CUSTOMER_ID, CustomerStatus.ACTIVE);
+    void staleSessionDoesNotInterceptPublicRegistration() throws Exception {
         Session session = authenticatedSession(CUSTOMER_ID, NOW.minus(Duration.ofHours(1)));
-        jdbcClient.sql("UPDATE spring_session SET last_access_time = 0, expiry_time = 0 WHERE session_id = :id")
+
+        MvcResult result = mockMvc.perform(post("/api/customers")
+                        .secure(true)
+                        .cookie(sessionCookie(session))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(404);
+    }
+
+    @Test
+    void staleSessionDoesNotInterceptPublicLoginInitiation() throws Exception {
+        Session session = authenticatedSession(CUSTOMER_ID, NOW.minus(Duration.ofHours(1)));
+
+        MvcResult result = mockMvc.perform(get("/oauth2/authorization/paycore")
+                        .secure(true)
+                        .cookie(sessionCookie(session)))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(302);
+        assertThat(result.getResponse().getRedirectedUrl()).startsWith("https://idp.example.test/authorize?");
+    }
+
+    @Test
+    void staleSessionDoesNotInterceptPublicLoginCallback() throws Exception {
+        Session session = authenticatedSession(CUSTOMER_ID, NOW.minus(Duration.ofHours(1)));
+
+        MvcResult result = mockMvc.perform(get("/login/oauth2/code/paycore")
+                        .secure(true)
+                        .cookie(sessionCookie(session))
+                        .queryParam("error", "access_denied"))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(403);
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("Authentication failed");
+    }
+
+    @Test
+    void repositoryIdleBoundaryAllowsActivityBeforeThirtyMinutesAndRejectsAtThirtyMinutes() throws Exception {
+        insertCustomer(CUSTOMER_ID, CustomerStatus.ACTIVE);
+        Instant authenticatedAt = NOW.minus(Duration.ofHours(1));
+        Session session = authenticatedSession(CUSTOMER_ID, authenticatedAt);
+        jdbcClient.sql("""
+                        WITH now_value AS (
+                            SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS epoch_millis
+                        )
+                        UPDATE spring_session
+                        SET last_access_time = now_value.epoch_millis - 1795000,
+                            expiry_time = now_value.epoch_millis + 5000
+                        FROM now_value
+                        WHERE session_id = :id
+                        """)
+                .param("id", session.getId()).update();
+        long beforeActivity = jdbcClient.sql("""
+                        SELECT last_access_time FROM spring_session WHERE session_id = :id
+                        """)
+                .param("id", session.getId()).query(Long.class).single();
+
+        assertThat(perform(sessionCookie(session)).getResponse().getStatus()).isEqualTo(200);
+
+        Session active = sessions.findById(session.getId());
+        assertThat(active).isNotNull();
+        assertThat(active.getLastAccessedTime().toEpochMilli()).isGreaterThan(beforeActivity);
+        assertThat(active.<Instant>getAttribute(
+                CustomerOidcAuthenticationSuccessHandler.AUTHENTICATED_AT_ATTRIBUTE)).isEqualTo(authenticatedAt);
+
+        authorizedClientManager.reset();
+        jdbcClient.sql("""
+                        WITH now_value AS (
+                            SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS epoch_millis
+                        )
+                        UPDATE spring_session
+                        SET last_access_time = now_value.epoch_millis - 1800000,
+                            expiry_time = now_value.epoch_millis
+                        FROM now_value
+                        WHERE session_id = :id
+                        """)
                 .param("id", session.getId()).update();
 
-        MvcResult result = perform(sessionCookie(session));
-
-        assertSanitized(result, 401, "Authentication required");
+        assertSanitized(perform(sessionCookie(session)), 401, "Authentication required");
         assertThat(authorizedClientManager.calls()).isZero();
     }
 
@@ -173,19 +287,6 @@ public class ProtectedSessionSecurityTest {
         assertSanitized(result, 403, "Access denied");
         assertThat(sessions.findById(session.getId())).isNull();
         assertThat(authorizedClientManager.calls()).isZero();
-    }
-
-    @Test
-    void refreshRejectionInvalidatesTheSessionAndReturnsSanitizedUnauthorized() throws Exception {
-        insertCustomer(CUSTOMER_ID, CustomerStatus.ACTIVE);
-        Session session = authenticatedSession(CUSTOMER_ID, NOW.minus(Duration.ofHours(1)));
-        authorizedClientManager.rejectRefresh();
-
-        MvcResult result = perform(sessionCookie(session));
-
-        assertSanitized(result, 401, "Authentication required");
-        assertThat(sessions.findById(session.getId())).isNull();
-        assertThat(authorizedClientManager.calls()).isEqualTo(1);
     }
 
     public Cookie sessionCookie(Session session) {
@@ -242,7 +343,6 @@ public class ProtectedSessionSecurityTest {
 
         private final ClientRegistration registration;
         private final AtomicInteger calls = new AtomicInteger();
-        private volatile boolean reject;
 
         public RecordingAuthorizedClientManager(ClientRegistration registration) {
             this.registration = registration;
@@ -251,18 +351,11 @@ public class ProtectedSessionSecurityTest {
         @Override
         public OAuth2AuthorizedClient authorize(OAuth2AuthorizeRequest authorizeRequest) {
             calls.incrementAndGet();
-            if (reject) {
-                throw new OAuth2AuthorizationException(new OAuth2Error("invalid_grant"));
-            }
             Instant issuedAt = NOW.minusSeconds(60);
             return new OAuth2AuthorizedClient(registration, authorizeRequest.getPrincipal().getName(),
                     new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "renewed-access-token",
                             issuedAt, NOW.plusSeconds(300)),
                     new OAuth2RefreshToken("refresh-token", issuedAt));
-        }
-
-        public void rejectRefresh() {
-            reject = true;
         }
 
         public int calls() {
@@ -271,7 +364,6 @@ public class ProtectedSessionSecurityTest {
 
         public void reset() {
             calls.set(0);
-            reject = false;
         }
     }
 

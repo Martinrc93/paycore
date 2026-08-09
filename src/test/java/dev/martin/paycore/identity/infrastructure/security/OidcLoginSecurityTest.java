@@ -1,7 +1,6 @@
 package dev.martin.paycore.identity.infrastructure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -17,6 +16,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -31,6 +33,7 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +48,7 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -62,13 +66,13 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
-import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
+import org.springframework.session.SessionRepository;
 import org.springframework.session.jdbc.JdbcIndexedSessionRepository;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -128,6 +132,9 @@ class OidcLoginSecurityTest {
     OAuth2AuthorizedClientRepository authorizedClients;
 
     @Autowired
+    RecordingAuthorizedClientRepository recordingAuthorizedClients;
+
+    @Autowired
     OAuth2AuthorizedClientManager authorizedClientManager;
 
     @Autowired
@@ -138,6 +145,7 @@ class OidcLoginSecurityTest {
         jdbcClient.sql("TRUNCATE TABLE spring_session CASCADE").update();
         jdbcClient.sql("TRUNCATE TABLE external_identities, customers CASCADE").update();
         PROVIDER.reset();
+        recordingAuthorizedClients.reset();
     }
 
     @AfterAll
@@ -305,20 +313,27 @@ class OidcLoginSecurityTest {
     }
 
     @Test
-    void rejectedRefreshInvalidatesTheLocalSession() throws Exception {
+    void configuredRefreshRejectionRemovesPersistedTokensBeforeInvalidatingTheSession(CapturedOutput output)
+            throws Exception {
+        UUID customerId = UUID.fromString("30000000-0000-0000-0000-000000000003");
+        linkCustomer(customerId, CustomerStatus.ACTIVE, PROVIDER.subject());
+        Cookie cookie = requiredSessionCookie(callback(loginStart(), "accepted-code"));
+        Session session = sessions.findById(repositorySessionId(cookie));
+        replaceAuthorizedClient(session, expiredAuthorizedClient(customerId.toString()));
         PROVIDER.rejectRefresh();
-        OAuth2AuthenticationToken authentication = localAuthentication();
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockHttpSession session = new MockHttpSession();
-        request.setSession(session);
-        authorizedClients.saveAuthorizedClient(
-                expiredAuthorizedClient(authentication.getName()), authentication, request, response);
 
-        assertThatThrownBy(() -> authorizedClientManager.authorize(authorizeRequest(authentication, request, response)))
-                .isInstanceOf(OAuth2AuthorizationException.class);
-        assertThat(session.isInvalid()).isTrue();
-        assertThat(response.getContentAsString()).doesNotContain(OidcProvider.ACCESS_TOKEN)
+        MvcResult result = mockMvc.perform(get("/test/protected").secure(true).cookie(cookie)).andReturn();
+
+        assertThat(PROVIDER.refreshRequests()).isEqualTo(1);
+        assertThat(recordingAuthorizedClients.removedBeforeInvalidation()).isTrue();
+        assertThat(result.getResponse().getStatus()).isEqualTo(401);
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("Authentication required");
+        assertThat(sessions.findById(repositorySessionId(cookie))).isNull();
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM spring_session_attributes")
+                .query(Long.class).single()).isZero();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain(OidcProvider.ACCESS_TOKEN)
+                .doesNotContain(OidcProvider.REFRESH_TOKEN);
+        assertThat(output.getAll()).doesNotContain(OidcProvider.ACCESS_TOKEN)
                 .doesNotContain(OidcProvider.REFRESH_TOKEN);
     }
 
@@ -443,6 +458,19 @@ class OidcLoginSecurityTest {
         return new OAuth2AuthorizedClient(registration, principalName, accessToken, refreshToken);
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void replaceAuthorizedClient(Session session, OAuth2AuthorizedClient replacement) {
+        String attributeName = session.getAttributeNames().stream()
+                .filter(name -> session.getAttribute(name) instanceof Map<?, ?> clients
+                        && clients.containsKey("paycore"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No authorized-client session attribute was persisted"));
+        Map<String, OAuth2AuthorizedClient> clients = new HashMap<>((Map) session.getAttribute(attributeName));
+        clients.put("paycore", replacement);
+        session.setAttribute(attributeName, clients);
+        ((SessionRepository) sessions).save(session);
+    }
+
     private static OAuth2AuthorizeRequest authorizeRequest(OAuth2AuthenticationToken authentication,
             MockHttpServletRequest request, MockHttpServletResponse response) {
         return OAuth2AuthorizeRequest.withClientRegistrationId("paycore")
@@ -463,6 +491,65 @@ class OidcLoginSecurityTest {
         Clock authenticationClock() {
             return Clock.fixed(AUTHENTICATED_AT, ZoneOffset.UTC);
         }
+
+        @Bean
+        @Primary
+        @ConditionalOnBooleanProperty(name = "paycore.authentication.enabled")
+        RecordingAuthorizedClientRepository recordingAuthorizedClientRepository() {
+            return new RecordingAuthorizedClientRepository();
+        }
+    }
+
+    static final class RecordingAuthorizedClientRepository implements OAuth2AuthorizedClientRepository {
+
+        private final OAuth2AuthorizedClientRepository delegate =
+                new org.springframework.security.oauth2.client.web.HttpSessionOAuth2AuthorizedClientRepository();
+        private final AtomicBoolean removedBeforeInvalidation = new AtomicBoolean();
+
+        @Override
+        public <T extends OAuth2AuthorizedClient> T loadAuthorizedClient(String clientRegistrationId,
+                org.springframework.security.core.Authentication principal, HttpServletRequest request) {
+            return delegate.loadAuthorizedClient(clientRegistrationId, principal, request);
+        }
+
+        @Override
+        public void saveAuthorizedClient(OAuth2AuthorizedClient authorizedClient,
+                org.springframework.security.core.Authentication principal,
+                HttpServletRequest request, HttpServletResponse response) {
+            delegate.saveAuthorizedClient(authorizedClient, principal, request, response);
+        }
+
+        @Override
+        public void removeAuthorizedClient(String clientRegistrationId,
+                org.springframework.security.core.Authentication principal,
+                HttpServletRequest request, HttpServletResponse response) {
+            HttpSession session = request.getSession(false);
+            boolean validBeforeRemoval = isValid(session);
+            delegate.removeAuthorizedClient(clientRegistrationId, principal, request, response);
+            if (validBeforeRemoval && delegate.loadAuthorizedClient(clientRegistrationId, principal, request) == null) {
+                removedBeforeInvalidation.set(true);
+            }
+        }
+
+        boolean removedBeforeInvalidation() {
+            return removedBeforeInvalidation.get();
+        }
+
+        void reset() {
+            removedBeforeInvalidation.set(false);
+        }
+
+        private static boolean isValid(HttpSession session) {
+            if (session == null) {
+                return false;
+            }
+            try {
+                session.getId();
+                return true;
+            } catch (IllegalStateException exception) {
+                return false;
+            }
+        }
     }
 
     private static final class OidcProvider {
@@ -477,6 +564,7 @@ class OidcLoginSecurityTest {
         private final AtomicReference<String> subject = new AtomicReference<>("provider-subject");
         private final AtomicReference<String> audience = new AtomicReference<>("paycore-test");
         private final AtomicBoolean rejectRefresh = new AtomicBoolean();
+        private final AtomicInteger refreshRequests = new AtomicInteger();
 
         private OidcProvider(HttpServer server, RSAKey signingKey) {
             this.server = server;
@@ -516,11 +604,16 @@ class OidcLoginSecurityTest {
             rejectRefresh.set(true);
         }
 
+        int refreshRequests() {
+            return refreshRequests.get();
+        }
+
         void reset() {
             nonce.set("missing-nonce");
             subject.set("provider-subject");
             audience.set("paycore-test");
             rejectRefresh.set(false);
+            refreshRequests.set(0);
         }
 
         void stop() {
@@ -542,6 +635,7 @@ class OidcLoginSecurityTest {
         private void tokenResponse(HttpExchange exchange) throws IOException {
             Map<String, String> form = form(exchange);
             if ("refresh_token".equals(form.get("grant_type"))) {
+                refreshRequests.incrementAndGet();
                 if (rejectRefresh.get()) {
                     json(exchange, 400, "{\"error\":\"invalid_grant\"}");
                 } else {

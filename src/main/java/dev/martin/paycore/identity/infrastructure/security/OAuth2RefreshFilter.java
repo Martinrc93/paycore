@@ -14,17 +14,25 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 public final class OAuth2RefreshFilter extends OncePerRequestFilter {
 
     private final OAuth2AuthorizedClientManager authorizedClientManager;
     private final OAuth2AuthorizedClientRepository authorizedClients;
+    private final RequestMatcher publicRequests;
 
     public OAuth2RefreshFilter(OAuth2AuthorizedClientManager authorizedClientManager,
-            OAuth2AuthorizedClientRepository authorizedClients) {
+            OAuth2AuthorizedClientRepository authorizedClients, RequestMatcher publicRequests) {
         this.authorizedClientManager = authorizedClientManager;
         this.authorizedClients = authorizedClients;
+        this.publicRequests = publicRequests;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return publicRequests.matches(request);
     }
 
     @Override

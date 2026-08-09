@@ -45,6 +45,9 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.web.http.CookieSerializer;
 import org.springframework.session.web.http.DefaultCookieSerializer;
 
@@ -137,13 +140,18 @@ public class AuthenticationSecurityConfiguration {
         DefaultOAuth2AuthorizationRequestResolver authorizationRequests =
                 new DefaultOAuth2AuthorizationRequestResolver(registrations);
         authorizationRequests.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());
-        SessionLifetimeFilter lifetimeFilter = new SessionLifetimeFilter(lifetimePolicy);
-        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, sessions);
-        OAuth2RefreshFilter refreshFilter = new OAuth2RefreshFilter(authorizedClientManager, authorizedClients);
+        PathPatternRequestMatcher.Builder paths = PathPatternRequestMatcher.withDefaults();
+        RequestMatcher publicRequests = new OrRequestMatcher(
+                paths.matcher(HttpMethod.POST, "/api/customers"),
+                paths.matcher("/oauth2/authorization/**"),
+                paths.matcher("/login/oauth2/code/**"));
+        SessionLifetimeFilter lifetimeFilter = new SessionLifetimeFilter(lifetimePolicy, publicRequests);
+        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, sessions, publicRequests);
+        OAuth2RefreshFilter refreshFilter =
+                new OAuth2RefreshFilter(authorizedClientManager, authorizedClients, publicRequests);
 
         http.authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers(HttpMethod.POST, "/api/customers").permitAll()
-                        .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
+                        .requestMatchers(publicRequests).permitAll()
                         .anyRequest().authenticated())
                 .csrf(csrf -> csrf.ignoringRequestMatchers("/api/customers"))
                 .httpBasic(AbstractHttpConfigurer::disable)

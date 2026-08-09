@@ -12,16 +12,25 @@ import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 public final class CustomerStatusFilter extends OncePerRequestFilter {
 
     private final ResolveCustomerAccess customerAccess;
     private final SessionRevocationPort sessions;
+    private final RequestMatcher publicRequests;
 
-    public CustomerStatusFilter(ResolveCustomerAccess customerAccess, SessionRevocationPort sessions) {
+    public CustomerStatusFilter(ResolveCustomerAccess customerAccess, SessionRevocationPort sessions,
+            RequestMatcher publicRequests) {
         this.customerAccess = customerAccess;
         this.sessions = sessions;
+        this.publicRequests = publicRequests;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return publicRequests.matches(request);
     }
 
     @Override
