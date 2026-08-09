@@ -48,11 +48,11 @@ Startup import is not an update mechanism. If the realm already exists, Keycloak
 Use this procedure for ordinary redirect, origin, flow, PKCE, or lifetime updates because it preserves users, identity links, credentials, and unrelated realm configuration.
 
 1. Set `PAYCORE_AUTHENTICATION_ENABLED=false`, drain login/callback traffic, and take an encrypted PostgreSQL/Keycloak database backup.
-2. Authenticate `kcadm.sh` to the exact production Keycloak 26.5.2 admin endpoint using an operator credential supplied outside command history. Install `age`, load `BACKUP_RECIPIENT` from protected deployment configuration, and set `AGE_IDENTITY_FILE` to a mode-`0400` identity file supplied outside shell history. Run the following Bash commands with `pipefail` so a failed `kcadm.sh`, `jq`, or `age` command fails the procedure.
+2. Authenticate `kcadm.sh` to the exact production Keycloak 26.5.2 admin endpoint using an operator credential supplied outside command history. Install `age`, load `BACKUP_RECIPIENT` from protected deployment configuration, and set `AGE_IDENTITY_FILE` to a mode-`0400` identity file supplied outside shell history. Run every block below in Bash with `set -euo pipefail`; each block repeats that setting and checks the variables it consumes so a copied block cannot continue after a failed command, failed pipeline, or missing prerequisite.
 3. Stream the pre-change representations directly into authenticated encryption. Do not redirect decrypted JSON to disk:
 
 ```bash
-set -o pipefail
+set -euo pipefail
 umask 077
 install -d -m 0700 /secure/paycore-admin-backup
 : "${BACKUP_RECIPIENT:?missing age backup recipient}"
@@ -70,6 +70,10 @@ kcadm.sh get "clients/${CLIENT_UUID}" -r paycore \
 4. Verify `CLIENT_UUID` resolves exactly one client and prove both encrypted artifacts decrypt and identify the intended resources without writing plaintext:
 
 ```bash
+set -euo pipefail
+: "${CLIENT_UUID:?missing verified Keycloak client UUID}"
+: "${AGE_IDENTITY_FILE:?missing age identity file}"
+
 test "$(printf '%s\n' "${CLIENT_UUID}" | grep -c .)" -eq 1
 age --decrypt --identity "${AGE_IDENTITY_FILE}" \
     /secure/paycore-admin-backup/pre-paycore-realm.json.age \
@@ -83,6 +87,10 @@ age --decrypt --identity "${AGE_IDENTITY_FILE}" \
 5. Create encrypted update artifacts through audited `jq` transforms. Set `PAYCORE_WEB_ORIGIN` to the exact externally visible HTTPS origin; it is an operator variable, not an additional PayCore application property. Delete `.secret` from the client representation so this update cannot rotate or overwrite the deployment secret. Pipe each transform directly back through `age`, then decrypt and validate the controlled fields without creating a plaintext file:
 
 ```bash
+set -euo pipefail
+: "${BACKUP_RECIPIENT:?missing age backup recipient}"
+: "${AGE_IDENTITY_FILE:?missing age identity file}"
+: "${CLIENT_UUID:?missing verified Keycloak client UUID}"
 : "${PAYCORE_OIDC_REDIRECT_URI:?missing exact HTTPS redirect URI}"
 : "${PAYCORE_WEB_ORIGIN:?missing exact HTTPS web origin}"
 
@@ -128,6 +136,10 @@ age --decrypt --identity "${AGE_IDENTITY_FILE}" \
 6. Decrypt each update artifact directly into the supported Keycloak Admin CLI standard-input form:
 
 ```bash
+set -euo pipefail
+: "${AGE_IDENTITY_FILE:?missing age identity file}"
+: "${CLIENT_UUID:?missing verified Keycloak client UUID}"
+
 age --decrypt --identity "${AGE_IDENTITY_FILE}" \
     /secure/paycore-admin-backup/paycore-realm-update.json.age \
   | kcadm.sh update realms/paycore -f -
@@ -142,6 +154,10 @@ age --decrypt --identity "${AGE_IDENTITY_FILE}" \
 Rollback the admin update by disabling login and streaming the encrypted pre-change representations directly to the same endpoints. Remove `.secret` in the client pipeline; client-secret rollback follows the separate maintenance procedure below. Re-run the decryption, resource-identity, controlled-field, discovery/JWKS, and PKCE checks before re-enabling login:
 
 ```bash
+set -euo pipefail
+: "${AGE_IDENTITY_FILE:?missing age identity file}"
+: "${CLIENT_UUID:?missing verified Keycloak client UUID}"
+
 age --decrypt --identity "${AGE_IDENTITY_FILE}" \
     /secure/paycore-admin-backup/pre-paycore-realm.json.age \
   | kcadm.sh update realms/paycore -f -
