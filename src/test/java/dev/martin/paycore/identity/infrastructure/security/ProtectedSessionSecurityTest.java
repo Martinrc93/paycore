@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -215,46 +216,37 @@ public class ProtectedSessionSecurityTest {
     }
 
     @Test
-    void repositoryIdleBoundaryAllowsActivityBeforeThirtyMinutesAndRejectsAtThirtyMinutes() throws Exception {
+    void repositoryIdleBoundaryUsesTheSameActivityResetWindowBeforeAndAtThirtyMinutes() throws Exception {
         insertCustomer(CUSTOMER_ID, CustomerStatus.ACTIVE);
         Instant authenticatedAt = NOW.minus(Duration.ofHours(1));
         Session session = authenticatedSession(CUSTOMER_ID, authenticatedAt);
-        jdbcClient.sql("""
-                        WITH now_value AS (
-                            SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS epoch_millis
+        long resetAt = jdbcClient.sql("""
+                        WITH reset_window AS (
+                            SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint - 1799000
+                                AS reset_at
                         )
                         UPDATE spring_session
-                        SET last_access_time = now_value.epoch_millis - 1795000,
-                            expiry_time = now_value.epoch_millis + 5000
-                        FROM now_value
+                        SET last_access_time = reset_window.reset_at,
+                            expiry_time = reset_window.reset_at + 1800000
+                        FROM reset_window
                         WHERE session_id = :id
-                        """)
-                .param("id", session.getId()).update();
-        long beforeActivity = jdbcClient.sql("""
-                        SELECT last_access_time FROM spring_session WHERE session_id = :id
+                        RETURNING last_access_time
                         """)
                 .param("id", session.getId()).query(Long.class).single();
+        long idleDeadline = resetAt + Duration.ofMinutes(30).toMillis();
 
-        assertThat(perform(sessionCookie(session)).getResponse().getStatus()).isEqualTo(200);
-
-        Session active = sessions.findById(session.getId());
-        assertThat(active).isNotNull();
-        assertThat(active.getLastAccessedTime().toEpochMilli()).isGreaterThan(beforeActivity);
-        assertThat(active.<Instant>getAttribute(
+        Session immediatelyBeforeDeadline = sessions.findById(session.getId());
+        assertThat(immediatelyBeforeDeadline).isNotNull();
+        assertThat(System.currentTimeMillis()).isLessThan(idleDeadline);
+        assertThat(immediatelyBeforeDeadline.getLastAccessedTime().toEpochMilli()).isEqualTo(resetAt);
+        assertThat(immediatelyBeforeDeadline.<Instant>getAttribute(
                 CustomerOidcAuthenticationSuccessHandler.AUTHENTICATED_AT_ATTRIBUTE)).isEqualTo(authenticatedAt);
 
+        while (System.currentTimeMillis() < idleDeadline) {
+            long remainingMillis = idleDeadline - System.currentTimeMillis();
+            LockSupport.parkNanos(Duration.ofMillis(Math.min(remainingMillis, 10)).toNanos());
+        }
         authorizedClientManager.reset();
-        jdbcClient.sql("""
-                        WITH now_value AS (
-                            SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS epoch_millis
-                        )
-                        UPDATE spring_session
-                        SET last_access_time = now_value.epoch_millis - 1800000,
-                            expiry_time = now_value.epoch_millis
-                        FROM now_value
-                        WHERE session_id = :id
-                        """)
-                .param("id", session.getId()).update();
 
         assertSanitized(perform(sessionCookie(session)), 401, "Authentication required");
         assertThat(authorizedClientManager.calls()).isZero();
