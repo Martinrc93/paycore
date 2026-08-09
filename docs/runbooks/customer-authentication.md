@@ -48,27 +48,108 @@ Startup import is not an update mechanism. If the realm already exists, Keycloak
 Use this procedure for ordinary redirect, origin, flow, PKCE, or lifetime updates because it preserves users, identity links, credentials, and unrelated realm configuration.
 
 1. Set `PAYCORE_AUTHENTICATION_ENABLED=false`, drain login/callback traffic, and take an encrypted PostgreSQL/Keycloak database backup.
-2. Authenticate `kcadm.sh` to the exact production Keycloak 26.5.2 admin endpoint using an operator credential supplied outside command history.
-3. Save encrypted pre-change representations:
+2. Authenticate `kcadm.sh` to the exact production Keycloak 26.5.2 admin endpoint using an operator credential supplied outside command history. Install `age`, load `BACKUP_RECIPIENT` from protected deployment configuration, and set `AGE_IDENTITY_FILE` to a mode-`0400` identity file supplied outside shell history. Run the following Bash commands with `pipefail` so a failed `kcadm.sh`, `jq`, or `age` command fails the procedure.
+3. Stream the pre-change representations directly into authenticated encryption. Do not redirect decrypted JSON to disk:
 
 ```bash
-kcadm.sh get realms/paycore > pre-paycore-realm.json
+set -o pipefail
+umask 077
+install -d -m 0700 /secure/paycore-admin-backup
+: "${BACKUP_RECIPIENT:?missing age backup recipient}"
+: "${AGE_IDENTITY_FILE:?missing age identity file}"
+
+kcadm.sh get realms/paycore \
+  | age --encrypt --recipient "${BACKUP_RECIPIENT}" \
+      --output /secure/paycore-admin-backup/pre-paycore-realm.json.age
 CLIENT_UUID="$(kcadm.sh get clients -r paycore -q clientId=paycore-bff --fields id --format csv --noquotes)"
-kcadm.sh get "clients/${CLIENT_UUID}" -r paycore > pre-paycore-bff.json
+kcadm.sh get "clients/${CLIENT_UUID}" -r paycore \
+  | age --encrypt --recipient "${BACKUP_RECIPIENT}" \
+      --output /secure/paycore-admin-backup/pre-paycore-bff.json.age
 ```
 
-4. Verify `CLIENT_UUID` resolves exactly one client. Create update JSON from those saved representations with `jq`: set realm `accessTokenLifespan=300`, `ssoSessionIdleTimeout=1800`, and `ssoSessionMaxLifespan=28800`; set the client booleans, exact redirect/origin arrays, and the three bounded attributes from the versioned contract. Delete `.secret` from the client update JSON so this non-secret update cannot rotate or overwrite the deployment secret.
-5. Apply the supported admin updates:
+4. Verify `CLIENT_UUID` resolves exactly one client and prove both encrypted artifacts decrypt and identify the intended resources without writing plaintext:
 
 ```bash
-kcadm.sh update realms/paycore -f paycore-realm-update.json
-kcadm.sh update "clients/${CLIENT_UUID}" -r paycore -f paycore-bff-update.json
+test "$(printf '%s\n' "${CLIENT_UUID}" | grep -c .)" -eq 1
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/pre-paycore-realm.json.age \
+  | jq -e '.realm == "paycore"' >/dev/null
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/pre-paycore-bff.json.age \
+  | jq -e --arg id "${CLIENT_UUID}" \
+      '.id == $id and .clientId == "paycore-bff"' >/dev/null
 ```
 
-6. Re-fetch both representations and compare only the controlled fields. Then verify discovery/JWKS and a PKCE login with PayCore login still disabled for general traffic.
-7. Re-enable login only after every pre/post assertion passes. Securely delete temporary representations according to the backup retention policy.
+5. Create encrypted update artifacts through audited `jq` transforms. Set `PAYCORE_WEB_ORIGIN` to the exact externally visible HTTPS origin; it is an operator variable, not an additional PayCore application property. Delete `.secret` from the client representation so this update cannot rotate or overwrite the deployment secret. Pipe each transform directly back through `age`, then decrypt and validate the controlled fields without creating a plaintext file:
 
-Rollback the admin update by disabling login, applying the encrypted `pre-paycore-realm.json` and `pre-paycore-bff.json` through the same two `kcadm.sh update` endpoints, re-running pre/post checks, and only then re-enabling login. Remove `.secret` from the saved client representation before rollback; client-secret rollback follows the separate maintenance procedure below.
+```bash
+: "${PAYCORE_OIDC_REDIRECT_URI:?missing exact HTTPS redirect URI}"
+: "${PAYCORE_WEB_ORIGIN:?missing exact HTTPS web origin}"
+
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/pre-paycore-realm.json.age \
+  | jq '.accessTokenLifespan = 300
+        | .ssoSessionIdleTimeout = 1800
+        | .ssoSessionMaxLifespan = 28800' \
+  | age --encrypt --recipient "${BACKUP_RECIPIENT}" \
+      --output /secure/paycore-admin-backup/paycore-realm-update.json.age
+
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/pre-paycore-bff.json.age \
+  | jq --arg redirect "${PAYCORE_OIDC_REDIRECT_URI}" \
+       --arg origin "${PAYCORE_WEB_ORIGIN}" \
+       'del(.secret)
+        | .enabled = true
+        | .publicClient = false
+        | .serviceAccountsEnabled = false
+        | .standardFlowEnabled = true
+        | .implicitFlowEnabled = false
+        | .directAccessGrantsEnabled = false
+        | .redirectUris = [$redirect]
+        | .webOrigins = [$origin]
+        | .attributes["pkce.code.challenge.method"] = "S256"
+        | .attributes["access.token.lifespan"] = "300"
+        | .attributes["client.session.idle.timeout"] = "1800"
+        | .attributes["client.session.max.lifespan"] = "28800"' \
+  | age --encrypt --recipient "${BACKUP_RECIPIENT}" \
+      --output /secure/paycore-admin-backup/paycore-bff-update.json.age
+
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/paycore-realm-update.json.age \
+  | jq -e '.realm == "paycore"
+           and .accessTokenLifespan == 300
+           and .ssoSessionIdleTimeout == 1800
+           and .ssoSessionMaxLifespan == 28800' >/dev/null
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/paycore-bff-update.json.age \
+  | jq -e --arg id "${CLIENT_UUID}" \
+      '.id == $id and .clientId == "paycore-bff" and (has("secret") | not)' >/dev/null
+```
+6. Decrypt each update artifact directly into the supported Keycloak Admin CLI standard-input form:
+
+```bash
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/paycore-realm-update.json.age \
+  | kcadm.sh update realms/paycore -f -
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/paycore-bff-update.json.age \
+  | kcadm.sh update "clients/${CLIENT_UUID}" -r paycore -f -
+```
+
+7. Re-fetch both representations and compare only the controlled fields by streaming the `kcadm.sh get` output and decrypted update artifact through `jq`; do not materialize either plaintext representation. Repeat the decryption/identity checks from step 4, then verify discovery/JWKS and a PKCE login with PayCore login still disabled for general traffic.
+8. Re-enable login only after every pre/post assertion passes. Retain the encrypted pre-change artifacts according to the backup policy and securely delete encrypted update artifacts when no longer needed.
+
+Rollback the admin update by disabling login and streaming the encrypted pre-change representations directly to the same endpoints. Remove `.secret` in the client pipeline; client-secret rollback follows the separate maintenance procedure below. Re-run the decryption, resource-identity, controlled-field, discovery/JWKS, and PKCE checks before re-enabling login:
+
+```bash
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/pre-paycore-realm.json.age \
+  | kcadm.sh update realms/paycore -f -
+age --decrypt --identity "${AGE_IDENTITY_FILE}" \
+    /secure/paycore-admin-backup/pre-paycore-bff.json.age \
+  | jq 'del(.secret)' \
+  | kcadm.sh update "clients/${CLIENT_UUID}" -r paycore -f -
+```
 
 ### Existing Realm: Offline Full Import
 
@@ -82,7 +163,7 @@ kc.sh export --dir /secure/pre-change-export --realm paycore --users realm_file
 ```
 
 3. Copy the complete export to a protected workspace and patch only the controlled realm/client fields. Preserve users, credentials, roles, components, identity links, and all unrelated configuration. Supply secret placeholders from the secret store; do not persist resolved values.
-4. Validate file naming (`paycore-realm.json` plus generated user files), ownership, checksums, and backup restore readiness.
+4. Because `--users realm_file` embeds users in the realm representation, require the complete export at `/secure/pre-change-export/paycore-realm.json` and no separate `paycore-users-*.json` or `paycore-users.json` files. Validate that exact file set, ownership, checksums, user count, and backup restore readiness. The rendered complete export must likewise contain `paycore-realm.json` with its users embedded.
 5. While every node remains stopped, run the supported offline replacement:
 
 ```bash
