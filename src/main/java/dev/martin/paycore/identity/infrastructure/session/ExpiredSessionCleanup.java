@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProp
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionOperations;
 
 @Component
 @ConditionalOnBooleanProperty(name = "paycore.authentication.enabled")
@@ -19,9 +20,11 @@ public final class ExpiredSessionCleanup {
     private final JdbcClient jdbcClient;
     private final Clock clock;
     private final AuthenticationMetrics metrics;
+    private final TransactionOperations transactions;
     private final int batchSize;
 
     public ExpiredSessionCleanup(JdbcClient jdbcClient, Clock clock, AuthenticationMetrics metrics,
+            TransactionOperations springSessionTransactionOperations,
             @Value("${paycore.authentication.session-cleanup.delay:5m}") Duration delay,
             @Value("${paycore.authentication.session-cleanup.initial-delay:5m}") Duration initialDelay,
             @Value("${paycore.authentication.session-cleanup.batch-size:1000}") int batchSize) {
@@ -34,6 +37,7 @@ public final class ExpiredSessionCleanup {
         this.jdbcClient = jdbcClient;
         this.clock = clock;
         this.metrics = metrics;
+        this.transactions = springSessionTransactionOperations;
         this.batchSize = batchSize;
     }
 
@@ -45,21 +49,22 @@ public final class ExpiredSessionCleanup {
             fixedDelayString = "${paycore.authentication.session-cleanup.delay:5m}",
             initialDelayString = "${paycore.authentication.session-cleanup.initial-delay:5m}")
     public int cleanUpExpiredSessions() {
-        int deleted = jdbcClient.sql("""
-                        WITH expired AS (
-                            SELECT primary_id
-                            FROM spring_session
-                            WHERE expiry_time < :now
-                            ORDER BY expiry_time
-                            LIMIT :batchSize
-                        )
-                        DELETE FROM spring_session session
-                        USING expired
-                        WHERE session.primary_id = expired.primary_id
-                        """)
-                .param("now", clock.millis())
-                .param("batchSize", batchSize)
-                .update();
+        int deleted = transactions.execute(status -> jdbcClient.sql("""
+                                WITH expired AS (
+                                    SELECT primary_id
+                                    FROM spring_session
+                                    WHERE expiry_time < :now
+                                    ORDER BY expiry_time, primary_id
+                                    LIMIT :batchSize
+                                    FOR UPDATE SKIP LOCKED
+                                )
+                                DELETE FROM spring_session session
+                                USING expired
+                                WHERE session.primary_id = expired.primary_id
+                                """)
+                        .param("now", clock.millis())
+                        .param("batchSize", batchSize)
+                        .update());
         metrics.expiredSessionsCleaned(deleted);
         return deleted;
     }

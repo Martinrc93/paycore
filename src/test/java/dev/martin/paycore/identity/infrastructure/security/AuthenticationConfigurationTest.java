@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -19,6 +21,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.web.server.Cookie.SameSite;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -277,5 +280,10 @@ class AuthenticationConfigurationTest {
                     type = FilterType.ASSIGNABLE_TYPE,
                     classes = AuthenticationSecurityConfiguration.class))
     static class BoundProperties {
+
+        @Bean
+        MeterRegistry authenticationTestMeterRegistry() {
+            return new SimpleMeterRegistry();
+        }
     }
 }

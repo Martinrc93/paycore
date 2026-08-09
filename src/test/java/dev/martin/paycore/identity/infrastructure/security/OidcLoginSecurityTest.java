@@ -203,7 +203,11 @@ class OidcLoginSecurityTest {
         assertThat(authorizedClient.getRefreshToken().getTokenValue()).isEqualTo(OidcProvider.REFRESH_TOKEN);
         assertThat(session.getAttributeNames()).noneMatch(name -> name.contains(PROVIDER.subject()));
         assertThat(output.getAll()).doesNotContain(OidcProvider.ACCESS_TOKEN)
-                .doesNotContain(OidcProvider.REFRESH_TOKEN);
+                .doesNotContain(OidcProvider.REFRESH_TOKEN)
+                .doesNotContain(PROVIDER.issuer())
+                .doesNotContain(PROVIDER.subject())
+                .doesNotContain("issuer-sensitive-sentinel")
+                .doesNotContain("subject-sensitive-sentinel");
     }
 
     @ParameterizedTest
@@ -554,6 +558,8 @@ class OidcLoginSecurityTest {
 
     private static final class OidcProvider {
 
+        static final String ISSUER_PATH = "/issuer-sensitive-sentinel";
+        static final String SUBJECT = "subject-sensitive-sentinel";
         static final String ACCESS_TOKEN = "provider-access-token-secret";
         static final String RENEWED_ACCESS_TOKEN = "renewed-access-token-secret";
         static final String REFRESH_TOKEN = "provider-refresh-token-secret";
@@ -561,7 +567,7 @@ class OidcLoginSecurityTest {
         private final HttpServer server;
         private final RSAKey signingKey;
         private final AtomicReference<String> nonce = new AtomicReference<>("missing-nonce");
-        private final AtomicReference<String> subject = new AtomicReference<>("provider-subject");
+        private final AtomicReference<String> subject = new AtomicReference<>(SUBJECT);
         private final AtomicReference<String> audience = new AtomicReference<>("paycore-test");
         private final AtomicBoolean rejectRefresh = new AtomicBoolean();
         private final AtomicInteger refreshRequests = new AtomicInteger();
@@ -585,7 +591,7 @@ class OidcLoginSecurityTest {
         }
 
         String issuer() {
-            return "http://127.0.0.1:" + server.getAddress().getPort();
+            return "http://127.0.0.1:" + server.getAddress().getPort() + ISSUER_PATH;
         }
 
         String subject() {
@@ -610,7 +616,7 @@ class OidcLoginSecurityTest {
 
         void reset() {
             nonce.set("missing-nonce");
-            subject.set("provider-subject");
+            subject.set(SUBJECT);
             audience.set("paycore-test");
             rejectRefresh.set(false);
             refreshRequests.set(0);
@@ -621,15 +627,15 @@ class OidcLoginSecurityTest {
         }
 
         private void registerContexts() {
-            server.createContext("/.well-known/openid-configuration", exchange -> json(exchange, 200, """
+            server.createContext(ISSUER_PATH + "/.well-known/openid-configuration", exchange -> json(exchange, 200, """
                     {"issuer":"%s","authorization_endpoint":"%s/authorize","token_endpoint":"%s/token",\
                     "jwks_uri":"%s/jwks","subject_types_supported":["public"],\
                     "id_token_signing_alg_values_supported":["RS256"]}
                     """.formatted(issuer(), issuer(), issuer(), issuer())));
-            server.createContext("/jwks", exchange -> json(exchange, 200,
+            server.createContext(ISSUER_PATH + "/jwks", exchange -> json(exchange, 200,
                     com.nimbusds.jose.util.JSONObjectUtils.toJSONString(
                             new JWKSet(signingKey.toPublicJWK()).toJSONObject())));
-            server.createContext("/token", this::tokenResponse);
+            server.createContext(ISSUER_PATH + "/token", this::tokenResponse);
         }
 
         private void tokenResponse(HttpExchange exchange) throws IOException {

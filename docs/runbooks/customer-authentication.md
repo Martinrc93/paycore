@@ -5,7 +5,7 @@
 - Terminate TLS only at PayCore or a trusted reverse proxy. Production browser, callback, and Keycloak URLs must use HTTPS.
 - Set `SERVER_FORWARD_HEADERS_STRATEGY=FRAMEWORK` only when the trusted proxy strips all client-supplied `Forwarded` and `X-Forwarded-*` headers before setting its own values. Otherwise leave the default `NONE`.
 - Keep the SPA and BFF same-site. The externally visible origin used by the browser must exactly match the Keycloak client redirect and web origin.
-- Import `deploy/keycloak/paycore-realm.json` into Keycloak 26.5.2 with deployment secrets supplied as environment values. Never persist rendered realm files containing secrets.
+- Use startup `--import-realm` only to create an absent realm. Keycloak 26.5.2 skips an existing realm during startup import; use the existing-realm procedure below for updates.
 - Apply Flyway migrations and verify PostgreSQL connectivity before enabling authentication. Do not let Spring initialize the session schema.
 - Keep login disabled until discovery, JWKS, Authorization Code + PKCE, database, cookie, cleanup, and rollback checks pass.
 
@@ -27,21 +27,88 @@ The production values below are one coherent deployment contract. Replace `payco
 | `PAYCORE_AUTHENTICATION_SESSION_CLEANUP_BATCH_SIZE` | Maximum rows removed per run from `1` through `10000`; default `1000`. |
 | `SERVER_FORWARD_HEADERS_STRATEGY` | `FRAMEWORK` only behind the trusted stripping proxy described above; otherwise `NONE`. |
 
-The versioned `paycore-bff` client is confidential, enables only standard Authorization Code flow, requires PKCE S256, and allows exactly `http://localhost:8080/login/oauth2/code/paycore` plus origin `http://localhost:8080` for the reproducible local contract. Production provisioning must replace those two non-secret local values with the exact HTTPS callback and origin above before accepting traffic. It must retain access-token lifetime 300 seconds, client/session idle lifetime 1800 seconds, and maximum lifetime 28800 seconds.
+The versioned `paycore-bff` client is confidential, enables only standard Authorization Code flow, requires PKCE S256, and allows exactly `http://localhost:8080/login/oauth2/code/paycore` plus origin `http://localhost:8080` for the reproducible local contract. Production provisioning must render those two non-secret local values to the exact HTTPS callback and origin above before accepting traffic. It must retain access-token lifetime 300 seconds, client/session idle lifetime 1800 seconds, and maximum lifetime 28800 seconds.
 
 Do not place usable client secrets, passwords, cookies, authorization codes, access tokens, refresh tokens, ID tokens, claims, issuers, subjects, or token fragments in source control, command history, logs, metrics, traces, tickets, or dashboards.
+
+## Realm Deployment And Updates
+
+### Fresh Realm
+
+1. Confirm `GET /admin/realms/paycore` returns HTTP 404 and take a database backup before provisioning.
+2. Copy `deploy/keycloak/paycore-realm.json` to a mode-`0600` temporary deployment workspace. Render only the production redirect URI and web origin with an audited JSON tool; do not edit the versioned file.
+3. Leave `${PAYCORE_OIDC_CLIENT_SECRET}` and the provisioner placeholder in the rendered JSON. Supply those values to the Keycloak process from the deployment secret store so Keycloak resolves them during import; never write their resolved values to the artifact.
+4. Name the rendered file `paycore-realm.json`, place it in `/opt/keycloak/data/import`, and start Keycloak 26.5.2 once with `kc.sh start --import-realm`. Remove the temporary rendered file after startup.
+5. Verify the realm and client through the admin API: exact issuer, redirect URI, web origin, confidential client, standard flow only, PKCE S256, disabled implicit/direct grants, and 300/1800/28800-second bounds. Complete discovery, JWKS, invalid-credential, and PKCE login gates before enabling PayCore login.
+
+Startup import is not an update mechanism. If the realm already exists, Keycloak logs that it was skipped and leaves the old configuration unchanged.
+
+### Existing Realm: Online Admin Update
+
+Use this procedure for ordinary redirect, origin, flow, PKCE, or lifetime updates because it preserves users, identity links, credentials, and unrelated realm configuration.
+
+1. Set `PAYCORE_AUTHENTICATION_ENABLED=false`, drain login/callback traffic, and take an encrypted PostgreSQL/Keycloak database backup.
+2. Authenticate `kcadm.sh` to the exact production Keycloak 26.5.2 admin endpoint using an operator credential supplied outside command history.
+3. Save encrypted pre-change representations:
+
+```bash
+kcadm.sh get realms/paycore > pre-paycore-realm.json
+CLIENT_UUID="$(kcadm.sh get clients -r paycore -q clientId=paycore-bff --fields id --format csv --noquotes)"
+kcadm.sh get "clients/${CLIENT_UUID}" -r paycore > pre-paycore-bff.json
+```
+
+4. Verify `CLIENT_UUID` resolves exactly one client. Create update JSON from those saved representations with `jq`: set realm `accessTokenLifespan=300`, `ssoSessionIdleTimeout=1800`, and `ssoSessionMaxLifespan=28800`; set the client booleans, exact redirect/origin arrays, and the three bounded attributes from the versioned contract. Delete `.secret` from the client update JSON so this non-secret update cannot rotate or overwrite the deployment secret.
+5. Apply the supported admin updates:
+
+```bash
+kcadm.sh update realms/paycore -f paycore-realm-update.json
+kcadm.sh update "clients/${CLIENT_UUID}" -r paycore -f paycore-bff-update.json
+```
+
+6. Re-fetch both representations and compare only the controlled fields. Then verify discovery/JWKS and a PKCE login with PayCore login still disabled for general traffic.
+7. Re-enable login only after every pre/post assertion passes. Securely delete temporary representations according to the backup retention policy.
+
+Rollback the admin update by disabling login, applying the encrypted `pre-paycore-realm.json` and `pre-paycore-bff.json` through the same two `kcadm.sh update` endpoints, re-running pre/post checks, and only then re-enabling login. Remove `.secret` from the saved client representation before rollback; client-secret rollback follows the separate maintenance procedure below.
+
+### Existing Realm: Offline Full Import
+
+Use offline replacement only for a deliberately complete realm migration, not for routine client updates. The versioned scaffold is not a complete export of runtime users and must never replace an existing production realm directly.
+
+1. Disable PayCore login, drain traffic, stop every Keycloak node connected to the database, and take an encrypted database snapshot.
+2. With all nodes stopped, create a complete pre-change export using the same Keycloak 26.5.2 build:
+
+```bash
+kc.sh export --dir /secure/pre-change-export --realm paycore --users realm_file
+```
+
+3. Copy the complete export to a protected workspace and patch only the controlled realm/client fields. Preserve users, credentials, roles, components, identity links, and all unrelated configuration. Supply secret placeholders from the secret store; do not persist resolved values.
+4. Validate file naming (`paycore-realm.json` plus generated user files), ownership, checksums, and backup restore readiness.
+5. While every node remains stopped, run the supported offline replacement:
+
+```bash
+kc.sh import --dir /secure/rendered-complete-export --override true
+```
+
+6. Start one node, perform all realm/client/user-count and authentication pre/post checks, then start the remaining nodes. Re-enable PayCore login last.
+
+Rollback by stopping every node again and importing `/secure/pre-change-export` with `--override true`, then repeating the same integrity and authentication checks. Never run offline export/import while a Keycloak node is serving the same database.
 
 ## Secret And Signing-Key Rotation
 
 ### Client Secret
 
-1. Keep login enabled only if the deployment platform can update Keycloak and every PayCore instance as one controlled rotation.
-2. Create a new Keycloak client secret using the supported client-secret rotation operation. Retain the previous secret during the deployment overlap when the configured Keycloak policy supports it.
-3. Update `PAYCORE_OIDC_CLIENT_SECRET` in the secret store, roll PayCore instances, and verify discovery plus a new PKCE login on every deployment pool.
-4. Remove or revoke the previous secret after no old instance remains and the login-failure rate is stable.
-5. If overlap is unavailable, disable login, invalidate PayCore sessions, rotate both sides in a maintenance window, verify, and then re-enable login.
+The versioned realm does not configure a Client Secret Rotation client policy or rotated-secret expiry. Ordinary secret regeneration therefore has no overlap guarantee and can invalidate the previous secret immediately. Always use this disabled-login maintenance path:
+
+1. Set `PAYCORE_AUTHENTICATION_ENABLED=false` on every instance, drain login/callback traffic, and invalidate PayCore sessions when the deployment cannot preserve them safely across the coordinated restart.
+2. Confirm no old PayCore instance can exchange an authorization code.
+3. Regenerate the `paycore-bff` secret through the Keycloak 26.5.2 admin client-secret endpoint. Send the response directly to the deployment secret store; do not print it or place it in a realm file, shell history, ticket, or temporary plaintext file.
+4. Atomically promote the new `PAYCORE_OIDC_CLIENT_SECRET`, restart every PayCore instance, and keep login disabled.
+5. Run discovery/JWKS checks and one controlled Authorization Code + PKCE login/code exchange using the new secret on every deployment pool.
+6. Re-enable login only after all instances use the new secret and login/refresh metrics remain stable.
 
 Never print either secret during comparison or troubleshooting. A client-secret rotation does not require a realm JSON commit.
+
+If verification fails, keep login disabled. Because ordinary regeneration provides no overlap, do not assume the old secret still works. Generate another secret, atomically update Keycloak and the deployment secret again, restart every instance, and repeat verification before restoring traffic.
 
 ### Realm Signing Keys
 
@@ -74,6 +141,7 @@ Alert on rate changes, sustained non-zero failures, cleanup backlog, and unexpec
 | `paycore.authentication.sessions.revoked` | `scope=current|all` | Session rows actually deleted by those operations. |
 | `paycore.authentication.session.cleanup.runs` | `reason=scheduled` | Bounded expired-session cleanup executions. |
 | `paycore.authentication.sessions.expired` | `reason=expired` | Expired session rows actually deleted; attributes are removed by FK cascade. |
+| `paycore.authentication.sessions.active` | none | Current PostgreSQL rows whose expiry is not in the past. |
 
 Operational log events contain only fixed `category` and `reason` values. Do not add Customer IDs, issuer/subject, request headers, cookies, credentials, claims, authorization codes, tokens, token fragments, exception messages, or remote response bodies.
 
@@ -91,7 +159,7 @@ FROM spring_session
 WHERE expiry_time < (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
 ```
 
-Alert if cleanup runs stop, expired backlog grows across multiple cleanup intervals, cleanup consistently reaches the configured batch size, refresh failures spike, or all-session deletion count changes unexpectedly. Increase cleanup frequency or batch size only within the validated bounds and after checking database load.
+Each application replica registers one cleanup schedule. PostgreSQL `FOR UPDATE SKIP LOCKED` coordinates replicas so concurrent runs claim disjoint bounded batches without double counting. Alert if cleanup runs stop, expired backlog grows across multiple cleanup intervals, cleanup consistently reaches the configured batch size, refresh failures spike, or all-session deletion count changes unexpectedly. Increase cleanup frequency or batch size only within the validated bounds and after checking database load.
 
 ## Incompatible Deployments
 
@@ -107,7 +175,7 @@ Do not attempt to transform or log serialized token attributes. Compatible rolli
 ## Rollout Gates
 
 1. Apply Flyway migrations with `PAYCORE_AUTHENTICATION_ENABLED=false`; never edit or revert released migrations.
-2. Provision Keycloak 26.5.2 with the confidential `paycore-bff` client, exact HTTPS redirect/origin, standard flow only, PKCE S256, bounded lifetimes, and deployment secret.
+2. Create an absent realm with fresh startup import or update an existing realm with the supported admin/offline procedure above. Verify the confidential `paycore-bff` client, exact HTTPS redirect/origin, standard flow only, PKCE S256, bounded lifetimes, and deployment secret.
 3. Verify TLS certificates, exact issuer discovery, JWKS reachability, trusted proxy stripping, and same-site external URLs from every PayCore instance.
 4. Run the real Keycloak authentication contract, focused observability tests, prior OIDC/security/session regressions, architecture tests, and the full test suite with Docker.
 5. Verify database least privilege, encrypted connection, encrypted backup, restore access controls, and cleanup queries.
@@ -121,5 +189,5 @@ Do not attempt to transform or log serialized token attributes. Compatible rolli
 2. Remove authentication traffic from the affected deployment and invalidate all PayCore sessions with `DELETE FROM spring_session`; verify FK-cascaded attributes are zero.
 3. Do not revert, delete, or edit Flyway migrations. Leave session tables unused if the previous application does not authenticate Customers.
 4. Roll back application or non-secret realm configuration only when issuer, client, redirect, signing keys, and persisted identity links remain compatible.
-5. Do not remove an overlapping signing key or previous client secret until all instances and tokens that require it are gone.
+5. Do not remove an overlapping signing key until all tokens that require it are gone. Client secrets have no assumed overlap and must use the disabled-login maintenance procedure.
 6. Verify login remains disabled, stale cookies receive HTTP 401, and cleanup/session counts stabilize before declaring rollback complete.

@@ -37,6 +37,7 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
+import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
@@ -335,6 +336,7 @@ public class ProtectedSessionSecurityTest {
 
         private final ClientRegistration registration;
         private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicReference<OAuth2AuthorizationException> rejection = new AtomicReference<>();
 
         public RecordingAuthorizedClientManager(ClientRegistration registration) {
             this.registration = registration;
@@ -343,6 +345,10 @@ public class ProtectedSessionSecurityTest {
         @Override
         public OAuth2AuthorizedClient authorize(OAuth2AuthorizeRequest authorizeRequest) {
             calls.incrementAndGet();
+            OAuth2AuthorizationException rejected = rejection.get();
+            if (rejected != null) {
+                throw rejected;
+            }
             Instant issuedAt = NOW.minusSeconds(60);
             return new OAuth2AuthorizedClient(registration, authorizeRequest.getPrincipal().getName(),
                     new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "renewed-access-token",
@@ -354,8 +360,13 @@ public class ProtectedSessionSecurityTest {
             return calls.get();
         }
 
+        public void rejectWith(OAuth2AuthorizationException exception) {
+            rejection.set(exception);
+        }
+
         public void reset() {
             calls.set(0);
+            rejection.set(null);
         }
     }
 

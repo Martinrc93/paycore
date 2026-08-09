@@ -15,7 +15,9 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,9 +30,20 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextImpl;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
+import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
@@ -58,6 +71,8 @@ class AuthenticationObservabilityTest {
     private static final String ACCESS_TOKEN = "representative-access-token-secret";
     private static final String REFRESH_TOKEN = "representative-refresh-token-secret";
     private static final String TOKEN_FRAGMENT = "eyJ-representative-token-fragment";
+    private static final String ISSUER = "https://issuer-sensitive-sentinel.example/realms/paycore";
+    private static final String SUBJECT = "subject-sensitive-sentinel";
 
     @Container
     @ServiceConnection
@@ -83,6 +98,15 @@ class AuthenticationObservabilityTest {
     @Autowired
     ExpiredSessionCleanup cleanup;
 
+    @Autowired
+    ClientRegistrationRepository registrations;
+
+    @Autowired
+    OAuth2AuthorizedClientRepository authorizedClients;
+
+    @Autowired
+    ProtectedSessionSecurityTest.RecordingAuthorizedClientManager authorizedClientManager;
+
     @BeforeEach
     void reset() {
         jdbcClient.sql("TRUNCATE TABLE spring_session CASCADE").update();
@@ -97,12 +121,20 @@ class AuthenticationObservabilityTest {
                         .queryParam("error_description", CREDENTIAL + AUTHORIZATION_CODE + TOKEN_FRAGMENT))
                 .andReturn();
 
-        Session denied = authenticatedSession(CUSTOMER_ID);
-        mockMvc.perform(get("/test/protected").secure(true).cookie(cookie(denied))).andReturn();
+        Session denied = customerSession(CUSTOMER_ID);
+        Cookie deniedCookie = cookie(denied);
+        mockMvc.perform(get("/test/protected").secure(true).cookie(deniedCookie)).andReturn();
 
         insertCustomer(CUSTOMER_ID, CustomerStatus.ACTIVE);
-        Session refreshRejected = authenticatedSession(CUSTOMER_ID);
-        mockMvc.perform(get("/test/protected").secure(true).cookie(cookie(refreshRejected))).andReturn();
+        Session refreshRejected = oauthSession(CUSTOMER_ID);
+        assertThat(findAuthorizedClient(refreshRejected).getAccessToken().getTokenValue()).isEqualTo(ACCESS_TOKEN);
+        assertThat(findAuthorizedClient(refreshRejected).getRefreshToken().getTokenValue()).isEqualTo(REFRESH_TOKEN);
+        authorizedClientManager.rejectWith(new OAuth2AuthorizationException(new OAuth2Error(
+                "invalid_grant", ISSUER + SUBJECT + ACCESS_TOKEN + REFRESH_TOKEN + TOKEN_FRAGMENT, null)));
+        Cookie refreshCookie = cookie(refreshRejected);
+        mockMvc.perform(get("/test/protected").secure(true).cookie(refreshCookie)).andReturn();
+        assertThat(authorizedClientManager.calls()).isEqualTo(1);
+        assertThat(sessions.findById(refreshRejected.getId())).isNull();
 
         Session current = persistedSession(ACCESS_TOKEN);
         Session first = persistedSession(REFRESH_TOKEN);
@@ -138,12 +170,19 @@ class AuthenticationObservabilityTest {
                 .contains("category=session_revocation reason=requested")
                 .contains("category=session_cleanup reason=expired")
                 .doesNotContain(CUSTOMER_ID.toString())
-                .doesNotContain(COOKIE_VALUE)
+                .doesNotContain(deniedCookie.getValue())
+                .doesNotContain(refreshCookie.getValue())
+                .doesNotContain(deniedCookie.getValue().substring(0, 12))
+                .doesNotContain(refreshCookie.getValue().substring(0, 12))
                 .doesNotContain(CREDENTIAL)
                 .doesNotContain(AUTHORIZATION_CODE)
                 .doesNotContain(ACCESS_TOKEN)
                 .doesNotContain(REFRESH_TOKEN)
-                .doesNotContain(TOKEN_FRAGMENT);
+                .doesNotContain(TOKEN_FRAGMENT)
+                .doesNotContain(ISSUER)
+                .doesNotContain(SUBJECT)
+                .doesNotContain("issuer-sensitive-sentinel")
+                .doesNotContain("subject-sensitive-sentinel");
         meters.getMeters().stream()
                 .filter(meter -> meter.getId().getName().startsWith("paycore.authentication."))
                 .forEach(meter -> meter.getId().getTags().forEach(tag -> assertThat(tag.getValue())
@@ -152,32 +191,81 @@ class AuthenticationObservabilityTest {
     }
 
     @Test
+    void activeSessionGaugeReadsOnlyNonExpiredPostgresSessionsFromTheExportedRegistry() {
+        Session active = persistedSession("active-session-attribute");
+        Session expired = persistedSession("expired-session-attribute");
+        jdbcClient.sql("UPDATE spring_session SET expiry_time = 0 WHERE session_id = :id")
+                .param("id", expired.getId()).update();
+
+        assertThat(sessions.findById(active.getId())).isNotNull();
+        assertThat(meters.get("paycore.authentication.sessions.active").gauge().value()).isEqualTo(1);
+    }
+
+    @Test
     void cleanupScheduleRejectsUnboundedDelayInitialDelayAndBatchSize() {
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> new ExpiredSessionCleanup(
-                null, null, null, Duration.ofSeconds(59), Duration.ofMinutes(5), 1000)))
+                null, null, null, null, Duration.ofSeconds(59), Duration.ofMinutes(5), 1000)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> new ExpiredSessionCleanup(
-                null, null, null, Duration.ofMinutes(5), Duration.ofHours(2), 1000)))
+                null, null, null, null, Duration.ofMinutes(5), Duration.ofHours(2), 1000)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> new ExpiredSessionCleanup(
-                null, null, null, Duration.ofMinutes(5), Duration.ofMinutes(5), 10_001)))
+                null, null, null, null, Duration.ofMinutes(5), Duration.ofMinutes(5), 10_001)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private Session authenticatedSession(UUID customerId) {
+    private Session customerSession(UUID customerId) {
         Session session = sessionRepository().createSession();
-        Object principal = new CustomerPrincipal(customerId);
-        TestingAuthenticationToken authentication = new TestingAuthenticationToken(principal, null, List.of());
-        authentication.setAuthenticated(true);
+        OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(
+                new CustomerPrincipal(customerId), List.of(), "paycore");
+        storeAuthentication(session, customerId, authentication);
+        sessionRepository().save(session);
+        return session;
+    }
+
+    private Session oauthSession(UUID customerId) {
+        Session session = sessionRepository().createSession();
+        OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(
+                new CustomerPrincipal(customerId), List.of(), "paycore");
+        storeAuthentication(session, customerId, authentication);
+        Instant issuedAt = Instant.parse("2026-08-08T16:00:00Z");
+        ClientRegistration registration = registrations.findByRegistrationId("paycore");
+        OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(
+                registration, customerId.toString(),
+                new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, ACCESS_TOKEN,
+                        issuedAt, issuedAt.plus(Duration.ofMinutes(5))),
+                new OAuth2RefreshToken(REFRESH_TOKEN, issuedAt));
+        MockHttpSession source = new MockHttpSession();
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setSession(source);
+        authorizedClients.saveAuthorizedClient(
+                authorizedClient, authentication, request, new MockHttpServletResponse());
+        source.getAttributeNames().asIterator()
+                .forEachRemaining(name -> session.setAttribute(name, source.getAttribute(name)));
+        sessionRepository().save(session);
+        return session;
+    }
+
+    private static void storeAuthentication(Session session, UUID customerId,
+            OAuth2AuthenticationToken authentication) {
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
                 new SecurityContextImpl(authentication));
         session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, customerId.toString());
         session.setAttribute(CustomerOidcAuthenticationSuccessHandler.AUTHENTICATED_AT_ATTRIBUTE,
                 Instant.parse("2026-08-08T17:00:00Z"));
-        session.setAttribute("representative-access-token", ACCESS_TOKEN);
-        session.setAttribute("representative-refresh-token", REFRESH_TOKEN);
-        sessionRepository().save(session);
-        return session;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static OAuth2AuthorizedClient findAuthorizedClient(Session session) {
+        return session.getAttributeNames().stream()
+                .map(session::<Object>getAttribute)
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .map(map -> map.get("paycore"))
+                .filter(OAuth2AuthorizedClient.class::isInstance)
+                .map(OAuth2AuthorizedClient.class::cast)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No persisted OAuth2AuthorizedClient"));
     }
 
     private Session persistedSession(String secret) {

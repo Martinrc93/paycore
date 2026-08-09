@@ -1,10 +1,8 @@
 package dev.martin.paycore.identity.infrastructure.security;
 
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -14,8 +12,8 @@ public final class AuthenticationMetrics {
 
     private final MeterRegistry meters;
 
-    public AuthenticationMetrics(ObjectProvider<MeterRegistry> meters) {
-        this.meters = meters.getIfAvailable(SimpleMeterRegistry::new);
+    public AuthenticationMetrics(MeterRegistry meters) {
+        this.meters = meters;
     }
 
     public void loginFailure() {

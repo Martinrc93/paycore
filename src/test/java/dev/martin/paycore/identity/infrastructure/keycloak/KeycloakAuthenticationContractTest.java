@@ -79,14 +79,14 @@ class KeycloakAuthenticationContractTest {
 
         String adminToken = adminToken(baseUrl);
         assertImportedClientContract(baseUrl, adminToken);
-        createTestUser(baseUrl, adminToken);
+        String userId = createTestUser(baseUrl, adminToken);
+
+        assertInvalidCredentialsDoNotYieldCodeOrSession(discovery, baseUrl, adminToken, userId);
 
         AuthorizationTokens oldTokens = authenticate(discovery, PASSWORD, "old-signing-state");
         assertThat(oldTokens.authorizationCode()).isNotBlank();
         assertThat(oldTokens.idToken().getJWTClaimsSet().getIssuer()).isEqualTo(issuer);
         assertThat(oldTokens.idToken().getJWTClaimsSet().getAudience()).contains(CLIENT_ID);
-
-        assertInvalidCredentialsDoNotYieldCode(discovery);
 
         String oldKid = oldTokens.idToken().getHeader().getKeyID();
         addActiveSigningKey(baseUrl, adminToken);
@@ -126,7 +126,7 @@ class KeycloakAuthenticationContractTest {
         assertThat(realm.path("ssoSessionMaxLifespan").asInt()).isEqualTo(28800);
     }
 
-    private static void createTestUser(String baseUrl, String adminToken) throws Exception {
+    private static String createTestUser(String baseUrl, String adminToken) throws Exception {
         String body = JSON.writeValueAsString(Map.of(
                 "username", USERNAME,
                 "email", USERNAME,
@@ -139,6 +139,8 @@ class KeycloakAuthenticationContractTest {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(201);
+        String location = response.headers().firstValue("Location").orElseThrow();
+        return URI.create(location).getPath().replaceFirst(".*/", "");
     }
 
     private static AuthorizationTokens authenticate(JsonNode discovery, String password, String state)
@@ -191,7 +193,8 @@ class KeycloakAuthenticationContractTest {
         return new AuthorizationTokens(code, SignedJWT.parse(JSON.readTree(token.body()).path("id_token").asText()));
     }
 
-    private static void assertInvalidCredentialsDoNotYieldCode(JsonNode discovery) throws Exception {
+    private static void assertInvalidCredentialsDoNotYieldCodeOrSession(JsonNode discovery, String baseUrl,
+            String adminToken, String userId) throws Exception {
         String verifier = "invalid-contract-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
         String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
@@ -211,9 +214,12 @@ class KeycloakAuthenticationContractTest {
 
         assertThat(rejected.statusCode()).isEqualTo(200);
         assertThat(rejected.headers().firstValue("Location")).isEmpty();
-        assertThat(rejected.headers().allValues("Set-Cookie"))
-                .noneMatch(cookie -> cookie.startsWith("KEYCLOAK_SESSION="));
+        List<String> returnedCookies = new ArrayList<>(loginPage.headers().allValues("Set-Cookie"));
+        returnedCookies.addAll(rejected.headers().allValues("Set-Cookie"));
+        assertThat(returnedCookies).noneMatch(KeycloakAuthenticationContractTest::isIdentityOrUserSessionCookie);
         assertThat(rejected.body()).contains("Invalid username or password");
+        assertThat(getAdminJson(baseUrl + "/admin/realms/" + REALM + "/users/" + userId + "/sessions",
+                adminToken)).isEmpty();
     }
 
     private static void addActiveSigningKey(String baseUrl, String adminToken) throws Exception {
@@ -306,6 +312,13 @@ class KeycloakAuthenticationContractTest {
         return response.headers().allValues("Set-Cookie").stream()
                 .map(header -> header.split(";", 2)[0])
                 .collect(java.util.stream.Collectors.joining("; "));
+    }
+
+    private static boolean isIdentityOrUserSessionCookie(String setCookie) {
+        String name = setCookie.split("=", 2)[0].toUpperCase(java.util.Locale.ROOT);
+        return name.startsWith("KEYCLOAK_SESSION")
+                || name.startsWith("KEYCLOAK_IDENTITY")
+                || name.startsWith("KEYCLOAK_REMEMBER_ME");
     }
 
     private static String form(Map<String, String> values) {
