@@ -88,7 +88,9 @@ public class AuthenticationSecurityConfiguration {
     RequestMatcher publicRequests() {
         PathPatternRequestMatcher.Builder paths = PathPatternRequestMatcher.withDefaults();
         return new OrRequestMatcher(
-                new DispatcherTypeRequestMatcher(DispatcherType.ERROR),
+                new AndRequestMatcher(
+                        new DispatcherTypeRequestMatcher(DispatcherType.ERROR),
+                        paths.matcher("/error")),
                 paths.matcher(HttpMethod.GET, "/actuator/health"),
                 paths.matcher(HttpMethod.POST, "/api/customers"),
                 paths.matcher(HttpMethod.GET, "/bff/auth/csrf"),
@@ -168,6 +170,9 @@ public class AuthenticationSecurityConfiguration {
                 CsrfFilter.DEFAULT_CSRF_MATCHER,
                 new NegatedRequestMatcher(registration),
                 request -> isLocalCustomerAuthenticated());
+        RequestMatcher authenticatedLogoutRequest = new AndRequestMatcher(
+                paths.matcher(HttpMethod.POST, navigation.logoutPath()),
+                request -> isLocalCustomerAuthenticated());
         HttpSessionCsrfTokenRepository csrfTokens = new HttpSessionCsrfTokenRepository();
         CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
         JsonAuthenticationEntryPoint authenticationEntryPoint = new JsonAuthenticationEntryPoint();
@@ -200,7 +205,7 @@ public class AuthenticationSecurityConfiguration {
                 .securityContext(context -> context.securityContextRepository(securityContexts))
                 .sessionManagement(session -> session.sessionFixation(fixation -> fixation.changeSessionId()))
                 .logout(logout -> logout
-                        .logoutUrl(navigation.logoutPath())
+                        .logoutRequestMatcher(authenticatedLogoutRequest)
                         .addLogoutHandler((request, response, authentication) -> {
                             HttpSession session = request.getSession(false);
                             if (session != null) {

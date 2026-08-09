@@ -126,6 +126,10 @@ class BrowserSecurityTest {
                             return request;
                         }))
                 .andReturn().getResponse().getStatus()).isNotEqualTo(401);
+        assertUnauthorized(get("/bff/auth/session").with(request -> {
+            request.setDispatcherType(DispatcherType.ERROR);
+            return request;
+        }));
 
         assertUnauthorized(get("/api/customers"));
         assertUnauthorized(post("/bff/auth/csrf"));
@@ -251,6 +255,32 @@ class BrowserSecurityTest {
         assertThat(hasAuthorizedClient(sessions.findById(current.getId()))).isTrue();
     }
 
+    @Test
+    void bootstrapOnlySessionCannotTriggerLogoutHandlersWithoutLocalAuthentication() throws Exception {
+        MvcResult bootstrap = mockMvc.perform(get("/bff/auth/csrf").secure(true)).andReturn();
+        Cookie cookie = requiredCookie(bootstrap);
+        String sessionId = repositorySessionId(cookie);
+        Session session = sessions.findById(sessionId);
+        assertThat(session).isNotNull();
+        session.setAttribute("bootstrap-marker", "preserved");
+        sessionRepository().save(session);
+        long attributesBefore = sessionAttributeCount(sessionId);
+
+        MvcResult result = mockMvc.perform(post("/bff/auth/logout")
+                        .secure(true)
+                        .cookie(cookie))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(401);
+        assertThat(result.getResponse().getContentType()).isEqualTo(MediaType.APPLICATION_JSON_VALUE);
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"code\":\"unauthorized\"}");
+        assertThat(result.getResponse().getCookie(SESSION_COOKIE)).isNull();
+        Session preserved = sessions.findById(sessionId);
+        assertThat(preserved).isNotNull();
+        assertThat(preserved.<String>getAttribute("bootstrap-marker")).isEqualTo("preserved");
+        assertThat(sessionAttributeCount(sessionId)).isEqualTo(attributesBefore);
+    }
+
     private void assertUnauthorized(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request)
             throws Exception {
         MvcResult result = mockMvc.perform(request.secure(true)).andReturn();
@@ -359,6 +389,11 @@ class BrowserSecurityTest {
     private static Cookie sessionCookie(Session session) {
         return new Cookie(SESSION_COOKIE, Base64.getEncoder().encodeToString(
                 session.getId().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    private static String repositorySessionId(Cookie cookie) {
+        return new String(Base64.getDecoder().decode(cookie.getValue()),
+                java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @SuppressWarnings("unchecked")
