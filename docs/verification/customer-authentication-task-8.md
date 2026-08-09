@@ -11,6 +11,7 @@
 - At that point, Fix Round 2 had not yet been independently re-reviewed.
 - The final whole-branch review then found two Important behavioral defects and one Medium operational-observability defect: authenticated registration bypassed CSRF, OIDC reauthentication retained the previous absolute-lifetime origin, and the replicated global active-session gauge lacked non-summing aggregation guidance.
 - The final fix wave captured one valid RED run for all three findings, applied the minimal fixes, passed the identical GREEN run, passed all 90 authentication-focused tests, and passed a fresh 193-test full Docker suite. The durable review dispositions are recorded in `docs/reviews/customer-authentication-task-8.md`.
+- The independent scoped re-review of the final fix commit judged all three findings addressed, found no new Critical, Important, or Medium breakage, and approved the branch.
 
 The detailed independent verdict history is preserved in `docs/reviews/customer-authentication-task-8.md`.
 
@@ -104,7 +105,7 @@ The in-flight suspension latch is not load-bearing. The contract requires reques
 
 The initial independent review found no exploitable authentication defect. Its four Important findings were completion-process/build-evidence defects; their verdict history and resolutions are in `docs/reviews/customer-authentication-task-8.md`.
 
-The later final whole-branch review superseded that limited assessment for the completed branch and found the two behavioral defects plus the gauge-semantics issue listed above. The final fix wave resolves all three; final-wave self-review found no remaining Critical, Important, or Medium issue.
+The later final whole-branch review superseded that limited assessment for the completed branch and found the two behavioral defects plus the gauge-semantics issue listed above. The final fix wave resolved all three, and the independent scoped re-review approved the fixes with no new Critical, Important, or Medium breakage.
 
 ## Final Fix Wave RED/GREEN And Verification
 

@@ -11,6 +11,7 @@ This tracked record preserves the independent Task 8 review chronology and verdi
 5. Fix Round 2 was prepared only after that re-review existed. It moved the authoritative report and scanner to tracked durable paths, recorded this chronology, and updated OpenSpec to cite only durable evidence. At that point it had not yet been independently re-reviewed.
 6. The final whole-branch review occurred after Fix Round 2. It found no Critical or Minor issue, but found two Important behavioral defects and one Medium operational-observability defect.
 7. The final fix wave addressed all three findings under strict TDD, reran all 90 authentication-focused tests and the fresh 193-test full Docker suite, and updated durable OpenSpec, verification, review, and runbook evidence. Final-wave self-review found no remaining Critical, Important, or Medium issue.
+8. An independent scoped re-review of commit `ccb8aa5` then judged all three final findings addressed, found no new Critical, Important, or Medium breakage, and approved the branch.
 
 ## Initial Independent Review
 
@@ -71,4 +72,4 @@ The later final whole-branch review independently reviewed the complete branch i
 
 The accepted RED run executed the three named regression methods together and produced 3 tests, 3 expected failures, 0 errors, and 0 skipped. The identical command after minimal implementation produced 3 tests, 0 failures, 0 errors, and 0 skipped. The durable exact command and failure details are in `docs/verification/customer-authentication-task-8.md`.
 
-The final self-review rechecked the three diffs against all 21 scenarios, the hexagonal boundaries, UTC/Clock rules, immutable Flyway history, privacy/rate-limit behavior, session refresh behavior, metric cardinality, and durable operations guidance. No Critical, Important, or Medium issue remains. Residual risks remain the documented credential-bearing PostgreSQL session attributes and the accepted inability to cancel work authorized before a suspension commit.
+The final self-review rechecked the three diffs against all 21 scenarios, the hexagonal boundaries, UTC/Clock rules, immutable Flyway history, privacy/rate-limit behavior, session refresh behavior, metric cardinality, and durable operations guidance. The subsequent independent scoped re-review verified each final finding as addressed, found no new Critical, Important, or Medium breakage, and returned `APPROVED`. Residual risks remain the documented credential-bearing PostgreSQL session attributes and the accepted inability to cancel work authorized before a suspension commit.
