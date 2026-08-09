@@ -238,11 +238,19 @@ Alert on rate changes, sustained non-zero failures, cleanup backlog, and unexpec
 | `paycore.authentication.sessions.revoked` | `scope=current|all` | Session rows actually deleted by those operations. |
 | `paycore.authentication.session.cleanup.runs` | `reason=scheduled` | Bounded expired-session cleanup executions. |
 | `paycore.authentication.sessions.expired` | `reason=expired` | Expired session rows actually deleted; attributes are removed by FK cascade. |
-| `paycore.authentication.sessions.active` | none | Current PostgreSQL rows whose expiry is not in the past. |
+| `paycore.authentication.sessions.active` | none | Replicated global PostgreSQL count of rows whose expiry is not in the past. Every replica exports the same database-wide snapshot; never sum replica copies. |
 
 Operational log events contain only fixed `category` and `reason` values. Do not add Customer IDs, issuer/subject, request headers, cookies, credentials, claims, authorization codes, tokens, token fragments, exception messages, or remote response bodies.
 
 Monitor current and expired backlog counts directly without selecting session IDs or attributes:
+
+For Prometheus-compatible dashboards and alerts, aggregate the replicated active-session gauge with `max`, not `sum`. Preserve environment/cluster/job labels while removing only replica identity labels; the exact baseline query is:
+
+```promql
+max without (instance, pod) (paycore_authentication_sessions_active)
+```
+
+Do not use `sum(paycore_authentication_sessions_active)`: it reports approximately the database-global count multiplied by the number of scraped replicas. Scaling and rolling deployments change that multiplier and can create false jumps. During a rollout, old and new replicas can also be scraped at slightly different instants; keep all replica series until the rollout completes and use `max` throughout. If the monitoring system uses replica labels other than `instance` or `pod`, add only those labels to `without`; do not remove labels that distinguish environments, clusters, or database deployments.
 
 ```sql
 SELECT count(*) AS active_sessions

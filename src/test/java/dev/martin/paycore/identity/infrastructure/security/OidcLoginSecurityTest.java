@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.martin.paycore.identity.application.authentication.SessionLifetimePolicy;
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -126,6 +127,9 @@ class OidcLoginSecurityTest {
     @Autowired
     ApplicationContext applicationContext;
 
+    @Autowired
+    SessionLifetimePolicy lifetimePolicy;
+
     @BeforeEach
     void resetState() {
         jdbcClient.sql("TRUNCATE TABLE spring_session CASCADE").update();
@@ -194,6 +198,28 @@ class OidcLoginSecurityTest {
                 .doesNotContain(PROVIDER.subject())
                 .doesNotContain("issuer-sensitive-sentinel")
                 .doesNotContain("subject-sensitive-sentinel");
+    }
+
+    @Test
+    void successfulReauthenticationRotatesSessionAndRestartsAbsoluteAndIdleLifetimes() throws Exception {
+        UUID customerId = UUID.fromString("10000000-0000-0000-0000-000000000009");
+        linkCustomer(customerId, CustomerStatus.ACTIVE, PROVIDER.subject());
+        Session existing = authenticatedSession(customerId, AUTHENTICATED_AT.minus(Duration.ofHours(7)));
+        LoginStart login = loginStart(existing);
+
+        MvcResult result = callback(login, "reauthenticated-code");
+
+        Cookie rotatedCookie = requiredSessionCookie(result);
+        assertThat(rotatedCookie.getValue()).isNotEqualTo(login.cookie().getValue());
+        assertThat(sessions.findById(existing.getId())).isNull();
+        Session reauthenticated = sessions.findById(repositorySessionId(rotatedCookie));
+        assertThat(reauthenticated).isNotNull();
+        Instant authenticatedAt = reauthenticated.getAttribute(
+                CustomerOidcAuthenticationSuccessHandler.AUTHENTICATED_AT_ATTRIBUTE);
+        assertThat(authenticatedAt).isEqualTo(AUTHENTICATED_AT);
+        assertThat(lifetimePolicy.absoluteExpiry(authenticatedAt))
+                .isEqualTo(Instant.parse("2026-08-09T02:00:00Z"));
+        assertThat(reauthenticated.getMaxInactiveInterval()).isEqualTo(Duration.ofMinutes(30));
     }
 
     @ParameterizedTest
@@ -341,6 +367,17 @@ class OidcLoginSecurityTest {
         return new LoginStart(requiredSessionCookie(result), parameters.get("state"));
     }
 
+    private LoginStart loginStart(Session session) throws Exception {
+        MvcResult result = mockMvc.perform(get("/oauth2/authorization/paycore")
+                        .secure(true)
+                        .cookie(sessionCookie(session)))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        Map<String, String> parameters = queryParameters(result.getResponse().getRedirectedUrl());
+        PROVIDER.useNonce(parameters.get("nonce"));
+        return new LoginStart(sessionCookie(session), parameters.get("state"));
+    }
+
     private MvcResult callback(LoginStart login, String code) throws Exception {
         return mockMvc.perform(get("/login/oauth2/code/paycore")
                         .secure(true)
@@ -383,6 +420,24 @@ class OidcLoginSecurityTest {
         Cookie cookie = result.getResponse().getCookie(SESSION_COOKIE);
         assertThat(cookie).as("opaque session cookie").isNotNull();
         return cookie;
+    }
+
+    private Session authenticatedSession(UUID customerId, Instant authenticatedAt) {
+        Session session = sessionRepository().createSession();
+        OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(
+                new CustomerPrincipal(customerId), java.util.List.of(), "paycore");
+        session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, customerId.toString());
+        session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
+                new org.springframework.security.core.context.SecurityContextImpl(authentication));
+        session.setAttribute(CustomerOidcAuthenticationSuccessHandler.AUTHENTICATED_AT_ATTRIBUTE, authenticatedAt);
+        session.setMaxInactiveInterval(Duration.ofMinutes(5));
+        sessionRepository().save(session);
+        return session;
+    }
+
+    private static Cookie sessionCookie(Session session) {
+        return new Cookie(SESSION_COOKIE, Base64.getEncoder().encodeToString(
+                session.getId().getBytes(StandardCharsets.UTF_8)));
     }
 
     private static void assertCookieContract(Cookie cookie) {
@@ -460,6 +515,11 @@ class OidcLoginSecurityTest {
         clients.put("paycore", replacement);
         session.setAttribute(attributeName, clients);
         ((SessionRepository) sessions).save(session);
+    }
+
+    @SuppressWarnings("unchecked")
+    private SessionRepository<Session> sessionRepository() {
+        return (SessionRepository<Session>) (SessionRepository<?>) sessions;
     }
 
     private static OAuth2AuthorizeRequest authorizeRequest(OAuth2AuthenticationToken authentication,

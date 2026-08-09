@@ -30,12 +30,10 @@ public final class CustomerOidcAuthenticationSuccessHandler implements Authentic
     public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
             Authentication authentication) throws IOException, ServletException {
         HttpSession session = request.getSession();
-        if (session.getAttribute(AUTHENTICATED_AT_ATTRIBUTE) == null) {
-            java.time.Instant authenticatedAt = clock.instant();
-            session.setAttribute(AUTHENTICATED_AT_ATTRIBUTE, authenticatedAt);
-            session.setMaxInactiveInterval(Math.toIntExact(
-                    roundUpToSeconds(lifetimePolicy.remainingIdleTimeout(authenticatedAt))));
-        }
+        java.time.Instant authenticatedAt = clock.instant();
+        session.setAttribute(AUTHENTICATED_AT_ATTRIBUTE, authenticatedAt);
+        session.setMaxInactiveInterval(Math.toIntExact(
+                roundUpToSeconds(lifetimePolicy.remainingIdleTimeout(authenticatedAt))));
         response.sendRedirect(successUri);
     }
 

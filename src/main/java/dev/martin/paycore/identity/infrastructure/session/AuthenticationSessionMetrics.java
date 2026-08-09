@@ -13,7 +13,7 @@ final class AuthenticationSessionMetrics {
     AuthenticationSessionMetrics(MeterRegistry meters, JdbcClient jdbcClient) {
         Gauge.builder("paycore.authentication.sessions.active", jdbcClient,
                         AuthenticationSessionMetrics::activeSessionCount)
-                .description("Current non-expired PayCore authentication sessions")
+                .description("Replicated global PostgreSQL active-session count; aggregate replicas with max, never sum")
                 .strongReference(true)
                 .register(meters);
     }

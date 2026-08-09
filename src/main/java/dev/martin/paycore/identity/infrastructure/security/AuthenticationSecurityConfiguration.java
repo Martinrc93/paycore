@@ -54,7 +54,6 @@ import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.security.web.util.matcher.AndRequestMatcher;
 import org.springframework.security.web.util.matcher.DispatcherTypeRequestMatcher;
-import org.springframework.security.web.util.matcher.NegatedRequestMatcher;
 import org.springframework.security.web.util.matcher.OrRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.web.http.CookieSerializer;
@@ -168,10 +167,8 @@ public class AuthenticationSecurityConfiguration {
                 new DefaultOAuth2AuthorizationRequestResolver(registrations);
         authorizationRequests.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());
         PathPatternRequestMatcher.Builder paths = PathPatternRequestMatcher.withDefaults();
-        RequestMatcher registration = paths.matcher(HttpMethod.POST, "/api/customers");
         RequestMatcher authenticatedUnsafeRequest = new AndRequestMatcher(
                 CsrfFilter.DEFAULT_CSRF_MATCHER,
-                new NegatedRequestMatcher(registration),
                 request -> isLocalCustomerAuthenticated());
         RequestMatcher authenticatedLogoutRequest = new AndRequestMatcher(
                 paths.matcher(HttpMethod.POST, navigation.logoutPath()),

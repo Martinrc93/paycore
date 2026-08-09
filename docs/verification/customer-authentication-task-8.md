@@ -2,13 +2,15 @@
 
 ## Status And Chronology
 
-- OpenSpec Task 8 is 38/38 after Fix Round 2 prepared durable completion evidence.
+- OpenSpec Task 8 is 38/38 after the final whole-branch review and final fix wave completed durable requirements and security evidence.
 - Commit `4347da5` initially completed Task 8 before an independent review existed.
 - The initial independent review then found four Important findings.
 - Fix Round 1 commit `b3f9492` addressed build portability, compiler warnings, and scanner auditability, but restored 8.4 before an independent fix re-review and stored evidence in a disposable workflow directory.
 - Independent fix re-review 1 existed before Fix Round 2. It confirmed the three technical fixes and left chronology plus evidence durability open.
 - Fix Round 2 closes 8.4 only after that re-review existed by establishing this report, `docs/reviews/customer-authentication-task-8.md`, and `scripts/scan-customer-authentication-secrets.ps1` as tracked durable artifacts.
-- Fix Round 2 has not yet been independently re-reviewed.
+- At that point, Fix Round 2 had not yet been independently re-reviewed.
+- The final whole-branch review then found two Important behavioral defects and one Medium operational-observability defect: authenticated registration bypassed CSRF, OIDC reauthentication retained the previous absolute-lifetime origin, and the replicated global active-session gauge lacked non-summing aggregation guidance.
+- The final fix wave captured one valid RED run for all three findings, applied the minimal fixes, passed the identical GREEN run, passed all 90 authentication-focused tests, and passed a fresh 193-test full Docker suite. The durable review dispositions are recorded in `docs/reviews/customer-authentication-task-8.md`.
 
 The detailed independent verdict history is preserved in `docs/reviews/customer-authentication-task-8.md`.
 
@@ -31,9 +33,10 @@ Total: 88 focused executions, 0 failures, 0 errors, 0 skipped. PostgreSQL runs f
 
 | Exact command | Result |
 | --- | --- |
-| `.\mvnw.cmd test` | 191 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
+| `.\mvnw.cmd test` (original Task 8 run) | 191 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
+| `.\mvnw.cmd clean` then `.\mvnw.cmd test` (final fix wave, 2026-08-09) | 193 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
 
-The run used PostgreSQL 17 and Keycloak 26.5.2 containers and emitted no Mockito self-attachment/dynamic-agent warning, authentication-test deprecation warning, or stale cleanup/Testcontainers error.
+The final run used PostgreSQL 17 and Keycloak 26.5.2 containers. Its clean compilation covered 83 main and 34 test sources with `-Xlint:unchecked` and emitted no compiler warning/note, Mockito self-attachment/dynamic-agent warning, authentication-test deprecation warning, or stale cleanup/Testcontainers error. Expected runtime WARN logs from negative HTTP-validation tests and the registration-alert test are test behavior, not build warnings.
 
 ## Scenario Evidence (8.3)
 
@@ -43,7 +46,7 @@ All 21 OpenSpec scenarios were checked against named implementation and executab
 | --- | --- | --- |
 | Customer starts login | `AuthenticationSecurityConfiguration` uses Authorization Code plus `withPkce()`; `OidcLoginSecurityTest.loginInitiationUsesStateNonceAndS256PkceWithoutExposingTokens` | PASS |
 | Identity provider rejects credentials | `KeycloakAuthenticationContractTest.importedRealmCompletesPkceLoginRejectsBadCredentialsAndOverlapsSigningKeys`; invalid credentials create no user session/code | PASS |
-| Active registered Customer completes login | `CustomerOidcAuthenticationSuccessHandler`; `OidcLoginSecurityTest.successfulCallbackRotatesSessionAndPersistsOnlyTheLocalCustomerIdentity` | PASS |
+| Active registered Customer completes login | `CustomerOidcAuthenticationSuccessHandler`; initial-login and `successfulReauthenticationRotatesSessionAndRestartsAbsoluteAndIdleLifetimes` callback tests | PASS |
 | Session identifier is renewed after login | Spring Security `changeSessionId()` and callback test compare pre/post IDs | PASS |
 | Linked active Customer is resolved | `ResolveCustomerAccessService`; exact issuer/subject unit and PostgreSQL adapter tests | PASS |
 | External identity is not linked | `OidcLoginSecurityTest.unknownIdentityReceivesSanitizedForbiddenWithoutAnAcceptedSession` | PASS |
@@ -53,13 +56,13 @@ All 21 OpenSpec scenarios were checked against named implementation and executab
 | Revoked Customer session is reused | The protected-session regression proves first 403 then stale-cookie 401 | PASS |
 | Session is absent or invalid | `JsonAuthenticationEntryPoint`; browser/protected tests assert fixed `{"code":"unauthorized"}` | PASS |
 | Session exceeds idle timeout | 30-minute JDBC session limit; exact repository inactivity boundary test | PASS |
-| Session reaches absolute lifetime | `SessionLifetimePolicy`, `SessionLifetimeFilter`, `AbsoluteExpirySessionRepository`; exact/fractional boundary tests | PASS |
+| Session reaches absolute lifetime | `SessionLifetimePolicy`, `SessionLifetimeFilter`, `AbsoluteExpirySessionRepository`; exact/fractional boundary tests plus reauthentication reset to the new injected-Clock instant and exact eight-hour deadline | PASS |
 | Access token expires during a valid local session | `OAuth2RefreshFilter`; server-only renewal persists fixed authenticated-at | PASS |
 | Identity provider rejects token renewal | Refresh failure removes authorized client and invalidates the session; rejection regression test | PASS |
 | Customer logs in from two devices | `SpringSessionRevocationAdapterTest.savesTwoIndependentConcurrentSessionsForOneCustomer` | PASS |
 | Customer is suspended with multiple sessions | Transactional status change and principal-index revocation; concurrent suspension/blocking tests | PASS |
-| State-changing request has a valid CSRF token | Session-backed CSRF repository; valid unsafe request test | PASS |
-| CSRF token is missing or invalid | Browser test proves missing, invalid, and cross-session 403 with no mutation | PASS |
+| State-changing request has a valid CSRF token | Session-backed CSRF repository; `BrowserSecurityTest.authenticatedRegistrationRequiresSameSessionCsrfBeforeCreatingRegistrationWork` proves same-session registration evaluates normally with the generic privacy-preserving 202 response | PASS |
+| CSRF token is missing or invalid | The same real registration integration test proves authenticated missing/cross-session tokens return fixed 403 and leave Customer, operation, and rate-limit rows unchanged | PASS |
 | Customer logs out from one device | Current-session and authorized-client removal plus exact cookie expiry; other session remains active | PASS |
 | Logout request is replayed | `BrowserSecurityTest.logoutDeletesOnlyCurrentPostgresSessionAndTokensExpiresExactCookieAndCannotResurrect` | PASS |
 
@@ -72,7 +75,7 @@ All 21 OpenSpec scenarios were checked against named implementation and executab
 | ADR-0004 UTC/Clock | Lifetime/status/cleanup use injected `Clock` and `Instant`; no production `Date`, `Calendar`, `LocalDateTime`, or direct wall-clock call was introduced | PASS |
 | V1 immutability | `git diff c886f6f -- src/main/resources/db/migration/V1__create_customer_registration.sql` produced no output | PASS |
 | V2 ordering | V2 is additive, supplies session/attribute tables and expiry/principal indexes, and fresh Flyway logs apply V1 before V2 | PASS |
-| Operational evidence | `docs/runbooks/customer-authentication.md` covers HTTPS/proxy trust, secret handling, encrypted DB/backups, rotation, cleanup, incompatible deployment, rollout, and rollback | PASS |
+| Operational evidence | `docs/runbooks/customer-authentication.md` covers HTTPS/proxy trust, secret handling, encrypted DB/backups, rotation, cleanup, incompatible deployment, rollout/rollback, and `max without (instance, pod)` aggregation for the replicated global active-session gauge | PASS |
 | Tasks 1.1-1.4 | Prerequisite linkage, Boot-managed dependencies, Keycloak pin/config, architecture rules | PASS |
 | Tasks 2.1-2.4 | Exact issuer/subject, inactive/unknown/email behavior, framework-free model/use case, revocation port | PASS |
 | Tasks 3.1-3.5 | V1 linkage, V2 schema, PostgreSQL adapter, 30-minute/principal indexing, expiration/revocation/cleanup | PASS |
@@ -80,7 +83,7 @@ All 21 OpenSpec scenarios were checked against named implementation and executab
 | Tasks 5.1-5.6 | Clock boundaries, repository cap, per-request status, all-session revocation, races | PASS |
 | Tasks 6.1-6.5 | Allowlist, session CSRF, cross-session denial, local logout, fixed 401/403 disclosure | PASS |
 | Tasks 7.1-7.4 | Realm contract, real Keycloak/key overlap, observability/cleanup, runbook | PASS |
-| Tasks 8.1-8.4 | Exact durable verification, requirements evidence, independent verdict chronology, Fix Round 2 durability remediation | PASS; Fix Round 2 not independently re-reviewed yet |
+| Tasks 8.1-8.4 | Exact durable verification, requirements evidence, complete independent/final-review chronology, final RED/GREEN fixes, and refreshed 90/193-test evidence | PASS |
 
 The in-flight suspension latch is not load-bearing. The contract requires requests starting after the status transition commits to be denied; `ConcurrentStatusRevocationTest.suspensionRacesWithAnInFlightRequestButNoRequestStartingAfterCommitCanSucceed` proves that boundary.
 
@@ -91,15 +94,42 @@ The in-flight suspension latch is not load-bearing. The contract requires reques
 | Credential/token leakage | Passwords remain in Keycloak; OAuth tokens remain in server-side authorized-client session; response/cookie/log assertions use representative sentinels | PASS |
 | Session fixation | Spring Security changes the ID at authentication and callback test proves rotation | PASS |
 | PKCE/state/nonce/audience/issuer | S256, tampered state, mismatched nonce, wrong audience, default issuer/time validation, and real Keycloak contract are covered | PASS |
-| CSRF bypass/cross-session | Unsafe requests require session CSRF; missing/invalid/cross-session values return 403 without mutation; logout requires CSRF | PASS |
+| CSRF bypass/cross-session | Anonymous registration remains public and CSRF-free, while authenticated registration and other unsafe requests require same-session CSRF; missing/invalid/cross-session values return fixed 403 without mutation; logout requires CSRF | PASS |
 | Cookie scope | `__Host-paycore-session` is Secure, HttpOnly, SameSite=Lax, Path=/, without Domain; asserted at browser boundary | PASS |
 | Provider/local privilege boundary | BFF has no service account/direct/implicit flow; provisioner is separate; application consumes validated issuer/subject and local Customer state | PASS |
-| Refresh/lifetime/status races | Rejection removes tokens/session; refresh does not move authenticated-at; absolute check precedes status/refresh; post-commit status race is deterministic | PASS |
-| Cleanup/metrics/log cardinality | Bounded transactional cleanup; fixed tags; count-only gauge; leakage assertions cover logs | PASS |
+| Refresh/lifetime/status races | Every successful OIDC authentication resets authenticated-at and the capped idle interval; refresh does not move it; rejection removes tokens/session; absolute check precedes status/refresh; post-commit status race is deterministic | PASS |
+| Cleanup/metrics/log cardinality | Bounded transactional cleanup; fixed tags; replicated global count-only gauge description requires `max`, never `sum`; runbook gives exact PromQL and scaling/rollout caveat; leakage assertions cover logs | PASS |
 | Failure disclosure | Fixed JSON 401/403 has no linkage/status/OIDC/token/cryptographic detail; invalid provider credentials never reach PayCore | PASS |
 | Logout/session independence | Current authorized client/session/cookie are removed while another device remains active; replay is 401 | PASS |
 
 The initial independent review found no exploitable authentication defect. Its four Important findings were completion-process/build-evidence defects; their verdict history and resolutions are in `docs/reviews/customer-authentication-task-8.md`.
+
+The later final whole-branch review superseded that limited assessment for the completed branch and found the two behavioral defects plus the gauge-semantics issue listed above. The final fix wave resolves all three; final-wave self-review found no remaining Critical, Important, or Medium issue.
+
+## Final Fix Wave RED/GREEN And Verification
+
+The first attempted RED command found a test-compilation mistake (`absoluteDeadline` was not the actual `SessionLifetimePolicy` API) and therefore was not accepted as RED evidence. After correcting the test to call `absoluteExpiry`, the unchanged production code produced the required behavioral RED:
+
+| Phase | Exact command | Result |
+| --- | --- | --- |
+| RED | `.\mvnw.cmd --% -Dtest=BrowserSecurityTest#authenticatedRegistrationRequiresSameSessionCsrfBeforeCreatingRegistrationWork,OidcLoginSecurityTest#successfulReauthenticationRotatesSessionAndRestartsAbsoluteAndIdleLifetimes,AuthenticationObservabilityTest#activeSessionGaugeReadsOnlyNonExpiredPostgresSessionsFromTheExportedRegistry test` | 3 tests, 3 expected failures, 0 errors, 0 skipped: registration returned 202 instead of 403, reauthentication retained `2026-08-08T11:00:00Z` instead of `2026-08-08T18:00:00Z`, and the gauge retained its ambiguous description |
+| GREEN | Same command after the three minimal production fixes | 3 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
+| Authentication-focused | `.\mvnw.cmd --% -Dtest=ResolveCustomerAccessServiceTest,ChangeCustomerStatusServiceTest,SessionLifetimePolicyTest,CustomerAccessPersistenceAdapterTest,SpringSessionRevocationAdapterTest,ConcurrentStatusRevocationTest,AuthenticationConfigurationTest,BrowserSecurityTest,OidcLoginSecurityTest,ProtectedSessionSecurityTest,KeycloakAuthenticationContractTest,AuthenticationObservabilityTest,ExpiredSessionCleanupTest,IdentityArchitectureTest test` | 90 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
+| Fresh full suite | `.\mvnw.cmd clean` then `.\mvnw.cmd test` | 193 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
+
+The first 90-test sweep exposed two stale test expectations: accepted registration creates two intentional rate-limit buckets, and a previous test expected authenticated public registration to bypass CSRF. The assertions were corrected to the existing dual-bucket design and the binding authenticated-unsafe CSRF requirement; no production workaround was added.
+
+### Final Fix Wave Validation And Scans
+
+| Check | Exact command | Result |
+| --- | --- | --- |
+| OpenSpec | `openspec validate "authenticate-customer" --strict` | Change is valid; exit 0 |
+| Whitespace | `git diff --check` | Exit 0; Git emitted only Windows working-copy LF-to-CRLF notices |
+| Released V1 immutability | `git diff --exit-code c886f6f -- src/main/resources/db/migration/V1__create_customer_registration.sql` | No diff; exit 0 |
+| Strong secret scan | `& ".\scripts\scan-customer-authentication-secrets.ps1" -Mode Strong -Baseline c886f6f` | 6,922 added lines; 17 rules; 0 strong matches; exit 0 |
+| Suspicious count-only scan | `& ".\scripts\scan-customer-authentication-secrets.ps1" -Mode Suspicious -Baseline c886f6f` | deployment placeholder 2; deployment literal 9; production source 65; test fixture 387; documentation/spec 200; scanner rules 3; exit 0 |
+
+Suspicious matches remain classified as environment substitutions, non-secret configuration/lifetime names, production identifiers or sanitized vocabulary, disposable test sentinels, requirements/audit prose, and scanner rules. No candidate value was printed and no real credential was identified.
 
 ## Fix Round 1 Evidence
 
@@ -155,4 +185,3 @@ Fix Round 2 changes only documentation, OpenSpec/plan references, and the scanne
 - PostgreSQL session attributes contain serialized OAuth tokens by design; the runbook requires least privilege, encrypted transport/storage/backups, bounded retention, and controlled incompatible-deployment invalidation.
 - Revocation cannot cancel work authorized before a suspension commit; every request starting after commit is deterministically denied as specified.
 - The fake provider converts `Instant` to `java.util.Date` only at a Nimbus test-fixture boundary; production lifetime/status/cleanup remains `Instant` plus injected `Clock`.
-- Fix Round 2 has not yet received an independent re-review.

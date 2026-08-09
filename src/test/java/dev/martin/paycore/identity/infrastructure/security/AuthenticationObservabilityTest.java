@@ -198,7 +198,10 @@ class AuthenticationObservabilityTest {
                 .param("id", expired.getId()).update();
 
         assertThat(sessions.findById(active.getId())).isNotNull();
-        assertThat(meters.get("paycore.authentication.sessions.active").gauge().value()).isEqualTo(1);
+        var gauge = meters.get("paycore.authentication.sessions.active").gauge();
+        assertThat(gauge.value()).isEqualTo(1);
+        assertThat(gauge.getId().getDescription())
+                .isEqualTo("Replicated global PostgreSQL active-session count; aggregate replicas with max, never sum");
     }
 
     @Test

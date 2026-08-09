@@ -3,6 +3,7 @@ package dev.martin.paycore.identity.infrastructure.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import dev.martin.paycore.testsupport.ProtectedSecurityTestConfiguration;
@@ -59,6 +60,17 @@ import static org.springframework.web.servlet.function.RouterFunctions.route;
 @AutoConfigureMockMvc
 @SpringBootTest(properties = {
         "paycore.authentication.enabled=true",
+        "paycore.registration.enabled=true",
+        "paycore.registration.worker-enabled=false",
+        "paycore.registration.idempotency-current-version=1",
+        "paycore.registration.idempotency-secrets=1=cmVnaXN0cmF0aW9uLXNlY3JldC1hdC1sZWFzdC0zMi1ieXRlcw==",
+        "paycore.registration.rate-limit-secret=rate-limit-secret-at-least-32-bytes",
+        "paycore.registration.keycloak.base-url=http://127.0.0.1:1",
+        "paycore.registration.keycloak.realm=paycore",
+        "paycore.registration.keycloak.issuer=http://127.0.0.1:1/realms/paycore",
+        "paycore.registration.keycloak.client-id=paycore-provisioner",
+        "paycore.registration.keycloak.client-secret=unused-test-secret",
+        "paycore.registration.keycloak.redirect-uri=https://paycore.example/registration-complete",
         "spring.main.allow-bean-definition-overriding=true",
         "spring.task.scheduling.enabled=false"
 })
@@ -97,7 +109,10 @@ class BrowserSecurityTest {
     @BeforeEach
     void resetState() {
         jdbcClient.sql("TRUNCATE TABLE spring_session CASCADE").update();
-        jdbcClient.sql("TRUNCATE TABLE external_identities, customers CASCADE").update();
+        jdbcClient.sql("""
+                TRUNCATE TABLE registration_operations, external_identities, customers, registration_rate_limits
+                CASCADE
+                """).update();
         stateChanges.reset();
     }
 
@@ -109,7 +124,7 @@ class BrowserSecurityTest {
                         .secure(true)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
-                .andReturn().getResponse().getStatus()).isNotEqualTo(401);
+                .andReturn().getResponse().getStatus()).isEqualTo(400);
         assertThat(mockMvc.perform(get("/bff/auth/csrf").secure(true)).andReturn().getResponse().getStatus())
                 .isEqualTo(200);
         assertThat(mockMvc.perform(get("/oauth2/authorization/paycore").secure(true)).andReturn()
@@ -196,6 +211,32 @@ class BrowserSecurityTest {
                 .andReturn();
         assertThat(valid.getResponse().getStatus()).isEqualTo(204);
         assertThat(stateChanges.count()).isEqualTo(1);
+    }
+
+    @Test
+    void authenticatedRegistrationRequiresSameSessionCsrfBeforeCreatingRegistrationWork() throws Exception {
+        Session current = authenticatedSession(CUSTOMER_ID, true);
+        Session other = authenticatedSession(OTHER_CUSTOMER_ID, true);
+        Csrf currentCsrf = csrfFor(current);
+        Csrf otherCsrf = csrfFor(other);
+
+        assertForbidden(mockMvc.perform(registrationRequest("missing-csrf", "missing@example.test")
+                        .cookie(sessionCookie(current)))
+                .andReturn());
+        assertForbidden(mockMvc.perform(registrationRequest("cross-session-csrf", "cross@example.test")
+                        .cookie(sessionCookie(current))
+                        .header(currentCsrf.headerName(), otherCsrf.token()))
+                .andReturn());
+        assertThat(registrationCounts()).isEqualTo(new RegistrationCounts(2, 0, 0));
+
+        mockMvc.perform(registrationRequest("same-session-csrf", "accepted@example.test")
+                        .cookie(sessionCookie(current))
+                        .header(currentCsrf.headerName(), currentCsrf.token()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted())
+                .andExpect(content().json("""
+                        {"message":"If registration can proceed, check your email."}
+                        """));
+        assertThat(registrationCounts()).isEqualTo(new RegistrationCounts(3, 1, 2));
     }
 
     @Test
@@ -372,6 +413,28 @@ class BrowserSecurityTest {
                 .query(Long.class).single();
     }
 
+    private RegistrationCounts registrationCounts() {
+        return new RegistrationCounts(
+                jdbcClient.sql("SELECT count(*) FROM customers").query(Long.class).single(),
+                jdbcClient.sql("SELECT count(*) FROM registration_operations").query(Long.class).single(),
+                jdbcClient.sql("SELECT count(*) FROM registration_rate_limits").query(Long.class).single());
+    }
+
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder registrationRequest(
+            String idempotencyKey, String email) {
+        return post("/api/customers")
+                .secure(true)
+                .header("Idempotency-Key", idempotencyKey)
+                .with(request -> {
+                    request.setRemoteAddr("203.0.113.10");
+                    return request;
+                })
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"email":"%s","customerType":"INDIVIDUAL"}
+                        """.formatted(email));
+    }
+
     private static boolean hasAuthorizedClient(Session session) {
         return session.getAttributeNames().stream()
                 .map(session::<Object>getAttribute)
@@ -402,6 +465,9 @@ class BrowserSecurityTest {
     }
 
     private record Csrf(String token, String headerName) {
+    }
+
+    private record RegistrationCounts(long customers, long operations, long rateLimits) {
     }
 
     static final class StateChanges {

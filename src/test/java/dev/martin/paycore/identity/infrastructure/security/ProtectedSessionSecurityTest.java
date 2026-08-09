@@ -176,7 +176,7 @@ public class ProtectedSessionSecurityTest {
     }
 
     @Test
-    void staleSessionDoesNotInterceptPublicRegistration() throws Exception {
+    void publicRegistrationStillRequiresCsrfForAnAuthenticatedSession() throws Exception {
         Session session = authenticatedSession(CUSTOMER_ID, NOW.minus(Duration.ofHours(1)));
 
         MvcResult result = mockMvc.perform(post("/api/customers")
@@ -186,7 +186,7 @@ public class ProtectedSessionSecurityTest {
                         .content("{}"))
                 .andReturn();
 
-        assertThat(result.getResponse().getStatus()).isEqualTo(404);
+        assertSanitized(result, 403, "{\"code\":\"forbidden\"}");
     }
 
     @Test
