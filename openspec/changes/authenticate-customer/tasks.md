@@ -40,11 +40,11 @@
 
 ## 6. Browser Security and Logout
 
-- [ ] 6.1 Define an explicit allowlist of public authentication endpoints and require a valid local session for protected BFF endpoints.
-- [ ] 6.2 Expose the session-bound CSRF token to the same-site SPA and require it on unsafe HTTP methods, including logout.
-- [ ] 6.3 Add security tests proving valid CSRF requests proceed and missing, invalid, or cross-session CSRF tokens return HTTP 403 without state changes.
-- [ ] 6.4 Implement current-session logout that removes the session and authorized client, expires the cookie, preserves other Customer sessions, and does not implicitly end Keycloak SSO.
-- [ ] 6.5 Return sanitized HTTP 401 responses for missing/invalid sessions and HTTP 403 for valid external identities that cannot access a local Customer, without disclosing linkage, status, OIDC, or token details.
+- [x] 6.1 Define an explicit allowlist of public authentication endpoints and require a valid local session for protected BFF endpoints.
+- [x] 6.2 Expose the session-bound CSRF token to the same-site SPA and require it on unsafe HTTP methods, including logout.
+- [x] 6.3 Add security tests proving valid CSRF requests proceed and missing, invalid, or cross-session CSRF tokens return HTTP 403 without state changes.
+- [x] 6.4 Implement current-session logout that removes the session and authorized client, expires the cookie, preserves other Customer sessions, and does not implicitly end Keycloak SSO.
+- [x] 6.5 Return sanitized HTTP 401 responses for missing/invalid sessions and HTTP 403 for valid external identities that cannot access a local Customer, without disclosing linkage, status, OIDC, or token details.
 
 ## 7. Keycloak Contract and Operational Verification
 

@@ -169,7 +169,7 @@ public class ProtectedSessionSecurityTest {
 
         MvcResult result = perform(sessionCookie(session));
 
-        assertSanitized(result, 401, "Authentication required");
+        assertSanitized(result, 401, "{\"code\":\"unauthorized\"}");
         assertThat(sessions.findById(session.getId())).isNull();
         assertThat(authorizedClientManager.calls()).isZero();
     }
@@ -212,7 +212,7 @@ public class ProtectedSessionSecurityTest {
                 .andReturn();
 
         assertThat(result.getResponse().getStatus()).isEqualTo(403);
-        assertThat(result.getResponse().getContentAsString()).isEqualTo("Authentication failed");
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"code\":\"forbidden\"}");
     }
 
     @Test
@@ -248,7 +248,7 @@ public class ProtectedSessionSecurityTest {
         }
         authorizedClientManager.reset();
 
-        assertSanitized(perform(sessionCookie(session)), 401, "Authentication required");
+        assertSanitized(perform(sessionCookie(session)), 401, "{\"code\":\"unauthorized\"}");
         assertThat(authorizedClientManager.calls()).isZero();
     }
 
@@ -264,10 +264,10 @@ public class ProtectedSessionSecurityTest {
 
         MvcResult discovered = perform(sessionCookie(first));
 
-        assertSanitized(discovered, 403, "Access denied");
+        assertSanitized(discovered, 403, "{\"code\":\"forbidden\"}");
         assertThat(indexedSessions().findByPrincipalName(CUSTOMER_ID.toString())).isEmpty();
         assertThat(authorizedClientManager.calls()).isZero();
-        assertSanitized(perform(sessionCookie(second)), 401, "Authentication required");
+        assertSanitized(perform(sessionCookie(second)), 401, "{\"code\":\"unauthorized\"}");
     }
 
     @Test
@@ -276,7 +276,7 @@ public class ProtectedSessionSecurityTest {
 
         MvcResult result = perform(sessionCookie(session));
 
-        assertSanitized(result, 403, "Access denied");
+        assertSanitized(result, 403, "{\"code\":\"forbidden\"}");
         assertThat(sessions.findById(session.getId())).isNull();
         assertThat(authorizedClientManager.calls()).isZero();
     }
@@ -315,7 +315,7 @@ public class ProtectedSessionSecurityTest {
 
     private static void assertSanitized(MvcResult result, int status, String body) throws Exception {
         assertThat(result.getResponse().getStatus()).isEqualTo(status);
-        assertThat(result.getResponse().getContentType()).isEqualTo(MediaType.TEXT_PLAIN_VALUE + ";charset=UTF-8");
+        assertThat(result.getResponse().getContentType()).isEqualTo(MediaType.APPLICATION_JSON_VALUE);
         assertThat(result.getResponse().getContentAsString()).isEqualTo(body);
         assertThat(result.getResponse().getContentAsString()).doesNotContain("invalid_grant")
                 .doesNotContain("refresh-token");

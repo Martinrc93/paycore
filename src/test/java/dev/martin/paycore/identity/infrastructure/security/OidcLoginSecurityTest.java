@@ -327,7 +327,7 @@ class OidcLoginSecurityTest {
         assertThat(PROVIDER.refreshRequests()).isEqualTo(1);
         assertThat(recordingAuthorizedClients.removedBeforeInvalidation()).isTrue();
         assertThat(result.getResponse().getStatus()).isEqualTo(401);
-        assertThat(result.getResponse().getContentAsString()).isEqualTo("Authentication required");
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"code\":\"unauthorized\"}");
         assertThat(sessions.findById(repositorySessionId(cookie))).isNull();
         assertThat(jdbcClient.sql("SELECT COUNT(*) FROM spring_session_attributes")
                 .query(Long.class).single()).isZero();
@@ -420,8 +420,8 @@ class OidcLoginSecurityTest {
 
     private void assertSanitizedForbiddenWithoutAcceptedSession(MvcResult result) throws Exception {
         assertThat(result.getResponse().getStatus()).isEqualTo(403);
-        assertThat(result.getResponse().getContentAsString()).isEqualTo("Authentication failed");
-        assertThat(result.getResponse().getContentType()).isEqualTo("text/plain;charset=UTF-8");
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"code\":\"forbidden\"}");
+        assertThat(result.getResponse().getContentType()).isEqualTo("application/json");
         assertNoTokens(result);
         assertThat(jdbcClient.sql("""
                         SELECT COUNT(*) FROM spring_session_attributes
