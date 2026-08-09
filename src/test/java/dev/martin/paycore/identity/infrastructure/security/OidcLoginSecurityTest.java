@@ -51,6 +51,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtValidators;
@@ -274,9 +275,10 @@ class OidcLoginSecurityTest {
                 .expiresAt(now.plusSeconds(300))
                 .build();
 
-        var validator = JwtValidators.createDefaultWithValidators(
+        var validator = new DelegatingOAuth2TokenValidator<>(java.util.List.of(
+                JwtValidators.createDefault(),
                 new org.springframework.security.oauth2.client.oidc.authentication.OidcIdTokenValidator(registration),
-                new OidcAudienceValidator(registration.getClientId()));
+                new OidcAudienceValidator(registration.getClientId())));
 
         assertThat(validator.validate(wrongIssuer).hasErrors()).isTrue();
     }

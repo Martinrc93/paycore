@@ -39,6 +39,7 @@ import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequest
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.client.web.OAuth2LoginAuthenticationFilter;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.oauth2.jwt.JwtDecoderFactory;
@@ -112,9 +113,10 @@ public class AuthenticationSecurityConfiguration {
     @Bean
     JwtDecoderFactory<ClientRegistration> oidcIdTokenDecoderFactory() {
         OidcIdTokenDecoderFactory factory = new OidcIdTokenDecoderFactory();
-        factory.setJwtValidatorFactory(registration -> JwtValidators.createDefaultWithValidators(
+        factory.setJwtValidatorFactory(registration -> new DelegatingOAuth2TokenValidator<>(java.util.List.of(
+                JwtValidators.createDefault(),
                 new OidcIdTokenValidator(registration),
-                new OidcAudienceValidator(registration.getClientId())));
+                new OidcAudienceValidator(registration.getClientId()))));
         return factory;
     }
 

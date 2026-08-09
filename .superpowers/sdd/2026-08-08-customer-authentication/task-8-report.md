@@ -2,9 +2,9 @@
 
 ## Status
 
-- Status: PASS.
-- OpenSpec: 38/38 tasks complete after current evidence was collected.
-- Review verdict: no open Critical, Important, or Medium findings.
+- Status: PASS after Fix Round 1.
+- OpenSpec: 38/38 tasks complete after the independent review's four Important findings were resolved and affected/full verification was rerun.
+- Review verdict: `.superpowers/sdd/2026-08-08-customer-authentication/task-8-review.md` found four Important completion-gate findings; Fix Round 1 resolved all four with no open Critical, Important, or Medium finding.
 - Branch: `feature/authenticate-customer`.
 - Baseline reviewed: `c886f6f` through the Task 8 working tree.
 - Commit: Task 8 commit message `test: completar verificacion de autenticacion`; the immutable SHA is reported by the creating session and available from `git log -1`.
@@ -136,3 +136,87 @@ No usable credential is present in `deploy/keycloak/paycore-realm.json`, applica
 - PostgreSQL session attributes contain serialized OAuth tokens by design. The runbook requires least privilege, encrypted transport/storage/backups, bounded retention, and controlled incompatible-deployment invalidation.
 - Revocation cannot cancel business work that was already authorized before a suspension commit; this is outside the stated OpenSpec contract. Every request starting after commit is deterministically denied.
 - The fake provider converts `Instant` to `java.util.Date` only at the Nimbus JWT test-fixture API boundary; production authentication lifetime/status/cleanup code remains `Instant` plus injected `Clock`.
+
+## Fix Round 1
+
+### Independent Review Resolution
+
+The independent `task-8-review.md` was created after the initial Task 8 commit and found four Important issues: premature self-certification of 8.4, an unquoted Mockito agent path, unresolved unchecked compiler warnings, and non-reproducible secret-scan evidence. Task 8.4 was reopened to 37/38 before changes. The four findings were resolved in this round, affected and full tests were rerun, and only then was 8.4 restored to 38/38.
+
+| Independent finding | Resolution | Verdict |
+| --- | --- | --- |
+| 1. Independent review gate self-certified early | OpenSpec 8.4 was reopened; this report and 8.4 now cite `task-8-review.md`, its four findings, this resolution round, and fresh affected/full evidence | RESOLVED |
+| 2. Mockito agent path fails when Maven repository path contains spaces | Surefire now retains `@{argLine}` and quotes only the resolved agent filesystem path: `-javaagent:"${org.mockito:mockito-core:jar}"` | RESOLVED |
+| 3. Branch-attributable unchecked compiler noise | Managed Compiler Plugin `-Xlint:unchecked` identified two OIDC validator generic-varargs warnings; validator composition now uses `DelegatingOAuth2TokenValidator(Collection)` without suppression | RESOLVED |
+| 4. Secret scans were not reproducible | Added `scan-task-8-secrets.ps1`, a count-only scanner over added lines in the complete `git diff c886f6f`; exact rules, commands, classifications, output, and exit status are below | RESOLVED |
+
+### Build Configuration Evidence
+
+Mockito path RED command (the Maven property itself is quoted so the test reaches Surefire):
+
+```powershell
+.\mvnw.cmd --% -Dmaven.repo.local="C:\Users\marti\AppData\Local\Temp\opencode\maven repo with spaces" -Dtest=ProcessRegistrationServiceTest test
+```
+
+Before the Surefire fix, the forked JVM received an unquoted `-javaagent:` value, attempted to open the path only through `...\opencode\maven`, ran 0 tests, and Maven exited 1. After quoting the resolved agent path, the identical command exits 0 with 9 tests, 0 failures, 0 errors, and 0 skipped. It emits no Mockito self-attachment, dynamic-agent, or CDS warning. An earlier probe that omitted quotes around the Maven property failed in Maven argument parsing before Surefire and is not used as RED evidence.
+
+Unchecked warning RED/GREEN command:
+
+```powershell
+.\mvnw.cmd clean test-compile
+```
+
+The managed Maven Compiler Plugin now always passes `-Xlint:unchecked`. RED output identified exactly:
+
+- `AuthenticationSecurityConfiguration.java:115`: unchecked generic array creation from `JwtValidators.createDefaultWithValidators(...)`.
+- `OidcLoginSecurityTest.java:277`: the same generic-varargs warning in the validator regression test.
+
+Both sites now compose `JwtValidators.createDefault()`, `OidcIdTokenValidator`, and `OidcAudienceValidator` through the type-safe `DelegatingOAuth2TokenValidator(Collection)` constructor. GREEN output compiles 83 main and 34 test source files with BUILD SUCCESS and no warning or unchecked/deprecation note.
+
+### Fix Verification
+
+| Exact command | Result |
+| --- | --- |
+| `.\mvnw.cmd --% -Dtest=AuthenticationConfigurationTest,OidcLoginSecurityTest,ProcessRegistrationServiceTest test` | 40 tests, 0 failures, 0 errors, 0 skipped |
+| `.\mvnw.cmd test` | 191 tests, 0 failures, 0 errors, 0 skipped; BUILD SUCCESS |
+
+### Reproducible Secret Scans
+
+Tool: PowerShell 5.1 script `.superpowers/sdd/2026-08-08-customer-authentication/scan-task-8-secrets.ps1`. Input: added lines from the complete branch diff produced by `git diff --unified=0 c886f6f --`. The script never prints candidate values. Strong matches cause exit 1; suspicious matches are count-classified for manual scope review.
+
+Strong ruleset (the split notation avoids the audit text matching its own signature):
+
+- AWS access IDs: `A` + `KIA[0-9A-Z]{16}`, `A` + `SIA[0-9A-Z]{16}`, `A3T` + `[0-9A-Z]{16}`.
+- GitHub/GitLab: `github_` + `pat_[A-Za-z0-9_]{20,}`, `gh` + `[pousr]_[A-Za-z0-9_]{20,}`, `gl` + `pat-[A-Za-z0-9_-]{20,}`.
+- Slack/Stripe/Google/SendGrid/npm/Twilio: `xox` + `[baprs]-[A-Za-z0-9-]{20,}`, `sk_` + `(?:live|test)_[A-Za-z0-9]{16,}`, `A` + `Iza[0-9A-Za-z_-]{35}`, `S` + `G\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}`, `npm_` + `[A-Za-z0-9]{20,}`, `SK` + `[0-9a-fA-F]{32}`.
+- Private keys and HTTP credentials: `-----BEGIN ` + `(?:RSA |EC |OPENSSH )?PRIVATE KEY-----`, `Bearer ` + `[A-Za-z0-9._~+/=-]{20,}`, `Basic ` + `[A-Za-z0-9+/=]{20,}`.
+- JWTs and credential-bearing database URLs: `eyJ` + `[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`, and `(postgres/sql/mysql/mongodb scheme)` with non-empty user/password before `@`.
+
+Strong command and output:
+
+```powershell
+& ".\.superpowers\sdd\2026-08-08-customer-authentication\scan-task-8-secrets.ps1" -Mode Strong -Baseline c886f6f
+# baseline=c886f6f
+# added_lines_scanned=6511
+# strong_rules=17
+# strong_matches=0
+# exit=0
+```
+
+Suspicious-literal command and count-only output:
+
+```powershell
+& ".\.superpowers\sdd\2026-08-08-customer-authentication\scan-task-8-secrets.ps1" -Mode Suspicious -Baseline c886f6f
+# baseline=c886f6f
+# added_lines_scanned=6511
+# suspicious_pattern=(?i)(password|passwd|pwd|secret|token|api[_-]?key|authorization|bearer|cookie|credential|private[_-]?key)
+# deployment_placeholder=2
+# deployment_literal=9
+# production_source=65
+# test_fixture=370
+# documentation_or_spec=164
+# scanner_rules=3
+# exit=0
+```
+
+Classification: deployment placeholders are environment substitutions, deployment literals are non-secret lifetime/property names, production-source matches are identifiers or fixed sanitized event/error vocabulary, test fixtures are explicitly disposable container/fake sentinels, documentation/spec matches are requirements and operational guidance, and scanner-rule matches are the auditable ruleset itself. No real credential was found; no candidate value is reproduced here.
