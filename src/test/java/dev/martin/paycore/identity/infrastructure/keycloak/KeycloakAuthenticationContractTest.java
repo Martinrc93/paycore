@@ -68,14 +68,14 @@ class KeycloakAuthenticationContractTest {
         String issuer = baseUrl + "/realms/" + REALM;
         JsonNode discovery = getJson(issuer + "/.well-known/openid-configuration");
 
-        assertThat(discovery.path("issuer").asText()).isEqualTo(issuer);
-        assertThat(discovery.path("authorization_endpoint").asText()).isEqualTo(
+        assertThat(discovery.path("issuer").asString()).isEqualTo(issuer);
+        assertThat(discovery.path("authorization_endpoint").asString()).isEqualTo(
                 issuer + "/protocol/openid-connect/auth");
-        assertThat(discovery.path("token_endpoint").asText()).isEqualTo(
+        assertThat(discovery.path("token_endpoint").asString()).isEqualTo(
                 issuer + "/protocol/openid-connect/token");
-        assertThat(discovery.path("jwks_uri").asText()).isEqualTo(
+        assertThat(discovery.path("jwks_uri").asString()).isEqualTo(
                 issuer + "/protocol/openid-connect/certs");
-        assertThat(getJson(discovery.path("jwks_uri").asText()).path("keys").size()).isGreaterThan(0);
+        assertThat(getJson(discovery.path("jwks_uri").asString()).path("keys").size()).isGreaterThan(0);
 
         String adminToken = adminToken(baseUrl);
         assertImportedClientContract(baseUrl, adminToken);
@@ -92,7 +92,7 @@ class KeycloakAuthenticationContractTest {
         addActiveSigningKey(baseUrl, adminToken);
         AuthorizationTokens newTokens = awaitTokenSignedByAnotherKey(discovery, oldKid);
         String newKid = newTokens.idToken().getHeader().getKeyID();
-        JWKSet overlappingKeys = awaitOverlappingJwks(discovery.path("jwks_uri").asText(), oldKid, newKid);
+        JWKSet overlappingKeys = awaitOverlappingJwks(discovery.path("jwks_uri").asString(), oldKid, newKid);
 
         assertThat(newKid).isNotEqualTo(oldKid);
         assertThat(overlappingKeys.getKeyByKeyId(oldKid)).isNotNull();
@@ -115,7 +115,7 @@ class KeycloakAuthenticationContractTest {
         assertThat(client.path("directAccessGrantsEnabled").asBoolean()).isFalse();
         assertThat(strings(client.path("redirectUris"))).containsExactly(REDIRECT_URI);
         assertThat(strings(client.path("webOrigins"))).containsExactly("http://localhost:8080");
-        assertThat(client.path("attributes").path("pkce.code.challenge.method").asText()).isEqualTo("S256");
+        assertThat(client.path("attributes").path("pkce.code.challenge.method").asString()).isEqualTo("S256");
         assertThat(client.path("attributes").path("access.token.lifespan").asInt()).isEqualTo(300);
         assertThat(client.path("attributes").path("client.session.idle.timeout").asInt()).isEqualTo(1800);
         assertThat(client.path("attributes").path("client.session.max.lifespan").asInt()).isEqualTo(28800);
@@ -149,7 +149,7 @@ class KeycloakAuthenticationContractTest {
         String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
         HttpClient browser = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
-        String authorizationUri = discovery.path("authorization_endpoint").asText()
+        String authorizationUri = discovery.path("authorization_endpoint").asString()
                 + "?" + form(Map.of(
                         "response_type", "code",
                         "client_id", CLIENT_ID,
@@ -179,7 +179,7 @@ class KeycloakAuthenticationContractTest {
         assertThat(code).isNotBlank();
 
         HttpResponse<String> token = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
-                        URI.create(discovery.path("token_endpoint").asText()))
+                        URI.create(discovery.path("token_endpoint").asString()))
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .POST(HttpRequest.BodyPublishers.ofString(form(Map.of(
                         "grant_type", "authorization_code",
@@ -190,7 +190,7 @@ class KeycloakAuthenticationContractTest {
                         "code_verifier", verifier))))
                 .build(), HttpResponse.BodyHandlers.ofString());
         assertThat(token.statusCode()).isEqualTo(200);
-        return new AuthorizationTokens(code, SignedJWT.parse(JSON.readTree(token.body()).path("id_token").asText()));
+        return new AuthorizationTokens(code, SignedJWT.parse(JSON.readTree(token.body()).path("id_token").asString()));
     }
 
     private static void assertInvalidCredentialsDoNotYieldCodeOrSession(JsonNode discovery, String baseUrl,
@@ -199,7 +199,7 @@ class KeycloakAuthenticationContractTest {
         String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
         HttpClient browser = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
-        String authorizationUri = discovery.path("authorization_endpoint").asText() + "?" + form(Map.of(
+        String authorizationUri = discovery.path("authorization_endpoint").asString() + "?" + form(Map.of(
                 "response_type", "code", "client_id", CLIENT_ID, "redirect_uri", REDIRECT_URI,
                 "scope", "openid", "state", "invalid-state", "nonce", "invalid-nonce",
                 "code_challenge", challenge, "code_challenge_method", "S256"));
@@ -228,7 +228,7 @@ class KeycloakAuthenticationContractTest {
                 "name", "contract-rotated-rsa",
                 "providerId", "rsa-generated",
                 "providerType", "org.keycloak.keys.KeyProvider",
-                "parentId", realm.path("id").asText(),
+                "parentId", realm.path("id").asString(),
                 "config", Map.of(
                         "priority", List.of("200"),
                         "enabled", List.of("true"),
@@ -281,7 +281,7 @@ class KeycloakAuthenticationContractTest {
                         "username", "admin", "password", "admin"))))
                 .build(), HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
-        return JSON.readTree(response.body()).path("access_token").asText();
+        return JSON.readTree(response.body()).path("access_token").asString();
     }
 
     private static JsonNode getAdminJson(String uri, String adminToken) throws Exception {
@@ -339,7 +339,7 @@ class KeycloakAuthenticationContractTest {
 
     private static List<String> strings(JsonNode values) {
         List<String> result = new ArrayList<>();
-        values.forEach(value -> result.add(value.asText()));
+        values.forEach(value -> result.add(value.asString()));
         return result;
     }
 

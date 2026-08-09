@@ -55,7 +55,7 @@
 
 ## 8. Completion Verification
 
-- [ ] 8.1 Run focused domain, application, persistence, and Spring Security tests and record the exact results.
-- [ ] 8.2 Run the full `mvnw test` suite with Docker available and resolve all regressions.
-- [ ] 8.3 Review the implementation against every `identity/customer-authentication` scenario, the architecture ADRs, UTC requirements, Flyway rules, and the OpenSpec task list.
-- [ ] 8.4 Perform a security-focused code review for credential/token leakage, session fixation, CSRF bypass, cookie scope, privilege boundaries, and failure-message disclosure.
+- [x] 8.1 Run focused domain, application, persistence, and Spring Security tests and record the exact results (2026-08-09: domain/application 19; PostgreSQL/Flyway/session/concurrency 10; Spring Security/browser/OIDC 48; Keycloak 26.5.2 contract 1; observability/cleanup 8; architecture 2; all with 0 failures, 0 errors, 0 skipped; exact commands in `task-8-report.md`).
+- [x] 8.2 Run the full `mvnw test` suite with Docker available and resolve all regressions (2026-08-09: `./mvnw.cmd test`; 191 tests, 0 failures, 0 errors, 0 skipped).
+- [x] 8.3 Review the implementation against every `identity/customer-authentication` scenario, the architecture ADRs, UTC requirements, Flyway rules, and the OpenSpec task list (2026-08-09: all 21 scenarios and tasks 1.1-8.4 evidenced; V1 unchanged from prerequisite baseline, V2 ordered and freshly applied; details in `task-8-report.md`).
+- [x] 8.4 Perform a security-focused code review for credential/token leakage, session fixation, CSRF bypass, cookie scope, privilege boundaries, and failure-message disclosure (2026-08-09: no open Critical, Important, or Medium findings; complete matrix in `task-8-report.md`).
