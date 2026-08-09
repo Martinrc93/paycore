@@ -48,10 +48,10 @@
 
 ## 7. Keycloak Contract and Operational Verification
 
-- [ ] 7.1 Version reproducible non-secret Keycloak realm/client configuration with confidential client, exact redirect URIs, allowed origins, PKCE, and bounded token lifetimes.
-- [ ] 7.2 Add a Keycloak contract or container test covering a successful authorization flow, invalid credentials, issuer/JWKS discovery, and signing-key rotation or overlapping keys.
-- [ ] 7.3 Add sanitized metrics and logs for login failures, refresh failures, session counts, cleanup, and Customer-access denials without recording cookies, credentials, or tokens.
-- [ ] 7.4 Document HTTPS, database encryption/backup expectations, client-secret handling, session invalidation during incompatible deployments, and rollback behavior.
+- [x] 7.1 Version reproducible non-secret Keycloak realm/client configuration with confidential client, exact redirect URIs, allowed origins, PKCE, and bounded token lifetimes (`KeycloakAuthenticationContractTest`; 2026-08-09).
+- [x] 7.2 Add a Keycloak contract or container test covering a successful authorization flow, invalid credentials, issuer/JWKS discovery, and signing-key rotation or overlapping keys (`KeycloakAuthenticationContractTest` on Keycloak 26.5.2; 1 test, 0 failures; 2026-08-09).
+- [x] 7.3 Add sanitized metrics and logs for login failures, refresh failures, session counts, cleanup, and Customer-access denials without recording cookies, credentials, or tokens (`AuthenticationObservabilityTest`; 2 tests, 0 failures; full suite 185 tests, 0 failures; 2026-08-09).
+- [x] 7.4 Document HTTPS, database encryption/backup expectations, client-secret handling, session invalidation during incompatible deployments, and rollback behavior (`docs/runbooks/customer-authentication.md`; self-reviewed against Task 7 brief; 2026-08-09).
 
 ## 8. Completion Verification
 

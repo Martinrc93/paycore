@@ -10,12 +10,13 @@ import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.jdbc.JdbcIndexedSessionRepository;
 import org.springframework.session.jdbc.config.annotation.web.http.EnableJdbcHttpSession;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Configuration(proxyBeanMethods = false)
-@EnableJdbcHttpSession(maxInactiveIntervalInSeconds = 30 * 60)
+@EnableJdbcHttpSession(maxInactiveIntervalInSeconds = 30 * 60, cleanupCron = Scheduled.CRON_DISABLED)
 public class AuthenticationSessionConfiguration {
 
     @Bean("springSessionTransactionOperations")

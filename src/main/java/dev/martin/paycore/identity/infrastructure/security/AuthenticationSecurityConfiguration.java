@@ -160,7 +160,8 @@ public class AuthenticationSecurityConfiguration {
             SessionLifetimePolicy lifetimePolicy,
             CustomerOidcAuthenticationSuccessHandler successHandler,
             AuthenticationNavigationProperties navigation,
-            RequestMatcher publicRequests) throws Exception {
+            RequestMatcher publicRequests,
+            AuthenticationMetrics metrics) throws Exception {
         DefaultOAuth2AuthorizationRequestResolver authorizationRequests =
                 new DefaultOAuth2AuthorizationRequestResolver(registrations);
         authorizationRequests.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());
@@ -178,9 +179,9 @@ public class AuthenticationSecurityConfiguration {
         JsonAuthenticationEntryPoint authenticationEntryPoint = new JsonAuthenticationEntryPoint();
         JsonAccessDeniedHandler accessDeniedHandler = new JsonAccessDeniedHandler();
         SessionLifetimeFilter lifetimeFilter = new SessionLifetimeFilter(lifetimePolicy, publicRequests);
-        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, sessions, publicRequests);
+        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, sessions, publicRequests, metrics);
         OAuth2RefreshFilter refreshFilter =
-                new OAuth2RefreshFilter(authorizedClientManager, authorizedClients, publicRequests);
+                new OAuth2RefreshFilter(authorizedClientManager, authorizedClients, publicRequests, metrics);
 
         http.authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(publicRequests).permitAll()
@@ -234,12 +235,12 @@ public class AuthenticationSecurityConfiguration {
                         .authorizationEndpoint(endpoint ->
                                 endpoint.authorizationRequestResolver(authorizationRequests))
                         .successHandler(successHandler)
-                        .failureHandler(AuthenticationSecurityConfiguration::authenticationFailure)
+                        .failureHandler((request, response, exception) -> authenticationFailure(response, metrics))
                         .withObjectPostProcessor(new ObjectPostProcessor<OAuth2LoginAuthenticationFilter>() {
                             @Override
                             public <O extends OAuth2LoginAuthenticationFilter> O postProcess(O filter) {
                                 filter.setAuthenticationResultConverter(authentication ->
-                                        localAuthentication(authentication, customerAccess));
+                                        localAuthentication(authentication, customerAccess, metrics));
                                 return filter;
                             }
                         }))
@@ -250,13 +251,16 @@ public class AuthenticationSecurityConfiguration {
     }
 
     private static OAuth2AuthenticationToken localAuthentication(OAuth2LoginAuthenticationToken authentication,
-            ResolveCustomerAccess resolver) {
+            ResolveCustomerAccess resolver, AuthenticationMetrics metrics) {
         OidcUser oidcUser = (OidcUser) authentication.getPrincipal();
         ExternalIdentity identity = new ExternalIdentity(
                 oidcUser.getIssuer().toExternalForm(), oidcUser.getSubject());
         CustomerAccess access = resolver.resolve(identity)
                 .filter(CustomerAccess::isActive)
-                .orElseThrow(() -> new OAuth2AuthenticationException(new OAuth2Error("access_denied")));
+                .orElseThrow(() -> {
+                    metrics.customerAccessDenied();
+                    return new OAuth2AuthenticationException(new OAuth2Error("access_denied"));
+                });
         CustomerPrincipal principal = new CustomerPrincipal(access.customerId().value());
         return new OAuth2AuthenticationToken(
                 principal, principal.getAuthorities(), authentication.getClientRegistration().getRegistrationId());
@@ -268,9 +272,9 @@ public class AuthenticationSecurityConfiguration {
                 && authentication.getPrincipal() instanceof CustomerPrincipal;
     }
 
-    private static void authenticationFailure(HttpServletRequest request,
-            jakarta.servlet.http.HttpServletResponse response,
-            org.springframework.security.core.AuthenticationException exception) throws IOException {
+    private static void authenticationFailure(HttpServletResponse response, AuthenticationMetrics metrics)
+            throws IOException {
+        metrics.loginFailure();
         SecurityResponses.forbidden(response);
     }
 

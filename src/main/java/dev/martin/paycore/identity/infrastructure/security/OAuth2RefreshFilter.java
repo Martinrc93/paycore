@@ -22,12 +22,15 @@ public final class OAuth2RefreshFilter extends OncePerRequestFilter {
     private final OAuth2AuthorizedClientManager authorizedClientManager;
     private final OAuth2AuthorizedClientRepository authorizedClients;
     private final RequestMatcher publicRequests;
+    private final AuthenticationMetrics metrics;
 
     public OAuth2RefreshFilter(OAuth2AuthorizedClientManager authorizedClientManager,
-            OAuth2AuthorizedClientRepository authorizedClients, RequestMatcher publicRequests) {
+            OAuth2AuthorizedClientRepository authorizedClients, RequestMatcher publicRequests,
+            AuthenticationMetrics metrics) {
         this.authorizedClientManager = authorizedClientManager;
         this.authorizedClients = authorizedClients;
         this.publicRequests = publicRequests;
+        this.metrics = metrics;
     }
 
     @Override
@@ -69,6 +72,7 @@ public final class OAuth2RefreshFilter extends OncePerRequestFilter {
 
     private void reject(HttpServletRequest request, HttpServletResponse response,
             Authentication authentication, String registrationId) throws IOException {
+        metrics.refreshFailure();
         if (registrationId != null) {
             try {
                 authorizedClients.removeAuthorizedClient(registrationId, authentication, request, response);

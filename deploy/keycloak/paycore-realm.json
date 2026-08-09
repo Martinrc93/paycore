@@ -7,6 +7,9 @@
   "duplicateEmailsAllowed": false,
   "loginWithEmailAllowed": true,
   "registrationEmailAsUsername": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
   "components": {
     "org.keycloak.userprofile.UserProfileProvider": [
       {

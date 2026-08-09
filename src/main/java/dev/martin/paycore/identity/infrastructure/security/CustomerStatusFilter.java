@@ -20,12 +20,14 @@ public final class CustomerStatusFilter extends OncePerRequestFilter {
     private final ResolveCustomerAccess customerAccess;
     private final SessionRevocationPort sessions;
     private final RequestMatcher publicRequests;
+    private final AuthenticationMetrics metrics;
 
     public CustomerStatusFilter(ResolveCustomerAccess customerAccess, SessionRevocationPort sessions,
-            RequestMatcher publicRequests) {
+            RequestMatcher publicRequests, AuthenticationMetrics metrics) {
         this.customerAccess = customerAccess;
         this.sessions = sessions;
         this.publicRequests = publicRequests;
+        this.metrics = metrics;
     }
 
     @Override
@@ -50,6 +52,7 @@ public final class CustomerStatusFilter extends OncePerRequestFilter {
         CustomerId customerId = new CustomerId(principal.customerId());
         boolean active = customerAccess.resolve(customerId).filter(CustomerAccess::isActive).isPresent();
         if (!active) {
+            metrics.customerAccessDenied();
             sessions.revokeAll(customerId);
             invalidate(request.getSession(false));
             SecurityResponses.forbidden(response);
