@@ -42,6 +42,8 @@ class KeycloakAuthenticationContractTest {
     private static final String REDIRECT_URI = "http://localhost:8080/login/oauth2/code/paycore";
     private static final String USERNAME = "contract-user@example.test";
     private static final String PASSWORD = "contract-only-password";
+    private static final String UNVERIFIED_USERNAME = "contract-unverified@example.test";
+    private static final String UNVERIFIED_PASSWORD = "contract-unverified-password";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern LOGIN_FORM = Pattern.compile(
             "<form[^>]+id=\"kc-form-login\"[^>]+action=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
@@ -87,6 +89,10 @@ class KeycloakAuthenticationContractTest {
         assertThat(oldTokens.authorizationCode()).isNotBlank();
         assertThat(oldTokens.idToken().getJWTClaimsSet().getIssuer()).isEqualTo(issuer);
         assertThat(oldTokens.idToken().getJWTClaimsSet().getAudience()).contains(CLIENT_ID);
+        assertThat(oldTokens.idToken().getJWTClaimsSet().getBooleanClaim("email_verified")).isTrue();
+
+        createTestUser(baseUrl, adminToken, UNVERIFIED_USERNAME, UNVERIFIED_PASSWORD, false);
+        assertUnverifiedUserRequiresEmailVerification(discovery);
 
         String oldKid = oldTokens.idToken().getHeader().getKeyID();
         addActiveSigningKey(baseUrl, adminToken);
@@ -127,13 +133,19 @@ class KeycloakAuthenticationContractTest {
     }
 
     private static String createTestUser(String baseUrl, String adminToken) throws Exception {
+        return createTestUser(baseUrl, adminToken, USERNAME, PASSWORD, true);
+    }
+
+    private static String createTestUser(String baseUrl, String adminToken, String username,
+            String password, boolean emailVerified) throws Exception {
         String body = JSON.writeValueAsString(Map.of(
-                "username", USERNAME,
-                "email", USERNAME,
-                "emailVerified", true,
+                "username", username,
+                "email", username,
+                "emailVerified", emailVerified,
                 "enabled", true,
+                "requiredActions", List.of(),
                 "credentials", List.of(Map.of(
-                        "type", "password", "value", PASSWORD, "temporary", false))));
+                        "type", "password", "value", password, "temporary", false))));
         HttpResponse<String> response = HttpClient.newHttpClient().send(adminRequest(
                         baseUrl + "/admin/realms/" + REALM + "/users", adminToken)
                 .header("Content-Type", "application/json")
@@ -145,6 +157,11 @@ class KeycloakAuthenticationContractTest {
 
     private static AuthorizationTokens authenticate(JsonNode discovery, String password, String state)
             throws Exception {
+        return authenticate(discovery, password, state, USERNAME);
+    }
+
+    private static AuthorizationTokens authenticate(JsonNode discovery, String password, String state,
+            String username) throws Exception {
         String verifier = "paycore-contract-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
         String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
@@ -167,7 +184,7 @@ class KeycloakAuthenticationContractTest {
                 .header("Cookie", browserCookies(loginPage))
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .POST(HttpRequest.BodyPublishers.ofString(form(Map.of(
-                        "username", USERNAME, "password", password, "credentialId", ""))))
+                        "username", username, "password", password, "credentialId", ""))))
                 .build(), HttpResponse.BodyHandlers.ofString());
         assertThat(login.statusCode()).as("Keycloak action=%s response=%s", action, login.body()).isEqualTo(302);
         URI callback = URI.create(login.headers().firstValue("Location").orElseThrow());
@@ -191,6 +208,31 @@ class KeycloakAuthenticationContractTest {
                 .build(), HttpResponse.BodyHandlers.ofString());
         assertThat(token.statusCode()).isEqualTo(200);
         return new AuthorizationTokens(code, SignedJWT.parse(JSON.readTree(token.body()).path("id_token").asString()));
+    }
+
+    private static void assertUnverifiedUserRequiresEmailVerification(JsonNode discovery) throws Exception {
+        String verifier = "unverified-contract-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
+        String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
+        HttpClient browser = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
+        String authorizationUri = discovery.path("authorization_endpoint").asString() + "?" + form(Map.of(
+                "response_type", "code", "client_id", CLIENT_ID, "redirect_uri", REDIRECT_URI,
+                "scope", "openid", "state", "unverified-state", "nonce", "unverified-nonce",
+                "code_challenge", challenge, "code_challenge_method", "S256"));
+        HttpResponse<String> loginPage = browser.send(HttpRequest.newBuilder(URI.create(authorizationUri)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> login = browser.send(HttpRequest.newBuilder(URI.create(loginAction(loginPage.body())))
+                .header("Cookie", browserCookies(loginPage))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(form(Map.of(
+                        "username", UNVERIFIED_USERNAME, "password", UNVERIFIED_PASSWORD, "credentialId", ""))))
+                .build(), HttpResponse.BodyHandlers.ofString());
+
+        assertThat(login.statusCode()).isEqualTo(302);
+        URI requiredAction = URI.create(login.headers().firstValue("Location").orElseThrow());
+        assertThat(requiredAction.getPath()).endsWith("/login-actions/required-action");
+        assertThat(requiredAction.getPath()).isNotEqualTo(URI.create(REDIRECT_URI).getPath());
+        assertThat(query(requiredAction)).doesNotContainKey("code");
     }
 
     private static void assertInvalidCredentialsDoNotYieldCodeOrSession(JsonNode discovery, String baseUrl,

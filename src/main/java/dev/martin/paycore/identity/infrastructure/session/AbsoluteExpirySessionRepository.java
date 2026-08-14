@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
@@ -36,6 +37,9 @@ public final class AbsoluteExpirySessionRepository implements FindByIndexNameSes
     @Override
     public void save(Session session) {
         transactions.executeWithoutResult(status -> {
+            if (!activeCustomerCanPersist(session)) {
+                return;
+            }
             Instant absoluteExpiry = absoluteExpiry(session);
             if (absoluteExpiry != null) {
                 session.setMaxInactiveInterval(roundUpToSeconds(
@@ -53,6 +57,27 @@ public final class AbsoluteExpirySessionRepository implements FindByIndexNameSes
                         .update();
             }
         });
+    }
+
+    private boolean activeCustomerCanPersist(Session session) {
+        Object principal = session.getAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME);
+        if (!(principal instanceof String principalName)) {
+            return true;
+        }
+
+        UUID customerId;
+        try {
+            customerId = UUID.fromString(principalName);
+        } catch (IllegalArgumentException exception) {
+            return true;
+        }
+
+        return jdbcClient.sql("SELECT status FROM customers WHERE id=:id FOR UPDATE")
+                .param("id", customerId)
+                .query(String.class)
+                .optional()
+                .filter("ACTIVE"::equals)
+                .isPresent();
     }
 
     @Override

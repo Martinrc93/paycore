@@ -32,14 +32,62 @@ class CustomerTest {
     }
 
     @Test
-    void activatesProvisioningCustomer() {
+    void completesProvisioningWithoutActivatingCustomer() {
         Customer customer = newCustomer(CustomerType.INDIVIDUAL);
-        Instant activatedAt = Instant.parse("2026-08-08T10:05:00Z");
+        Instant completedAt = Instant.parse("2026-08-08T10:05:00Z");
 
-        customer.activate(activatedAt);
+        customer.completeProvisioning(completedAt);
+
+        assertThat(customer.status()).isEqualTo(CustomerStatus.PENDING_VERIFICATION);
+        assertThat(customer.updatedAt()).isEqualTo(completedAt);
+    }
+
+    @Test
+    void activatesPendingCustomerAfterVerifiedEmail() {
+        Customer customer = newCustomer(CustomerType.INDIVIDUAL);
+        Instant completedAt = Instant.parse("2026-08-08T10:05:00Z");
+        Instant activatedAt = Instant.parse("2026-08-08T10:06:00Z");
+
+        customer.completeProvisioning(completedAt);
+        customer.activateVerified(activatedAt);
 
         assertThat(customer.status()).isEqualTo(CustomerStatus.ACTIVE);
         assertThat(customer.updatedAt()).isEqualTo(activatedAt);
+    }
+
+    @Test
+    void rejectsDirectActivationFromProvisioning() {
+        Customer customer = newCustomer(CustomerType.INDIVIDUAL);
+
+        assertThatThrownBy(() -> customer.activateVerified(Instant.parse("2026-08-08T10:05:00Z")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void rejectsRepeatedVerifiedActivation() {
+        Customer customer = newCustomer(CustomerType.INDIVIDUAL);
+        customer.completeProvisioning(Instant.parse("2026-08-08T10:05:00Z"));
+        customer.activateVerified(Instant.parse("2026-08-08T10:06:00Z"));
+
+        assertThatThrownBy(() -> customer.activateVerified(Instant.parse("2026-08-08T10:07:00Z")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void preservesSuspendedAndBlockedTransitions() {
+        Customer suspended = Customer.rehydrate(
+                new CustomerId(UUID.fromString("11111111-1111-1111-1111-111111111111")),
+                Email.of("person@example.com"), CustomerType.INDIVIDUAL, CustomerStatus.SUSPENDED,
+                CREATED_AT, CREATED_AT);
+        Customer blocked = Customer.rehydrate(
+                new CustomerId(UUID.fromString("22222222-2222-2222-2222-222222222222")),
+                Email.of("blocked@example.com"), CustomerType.INDIVIDUAL, CustomerStatus.BLOCKED,
+                CREATED_AT, CREATED_AT);
+
+        assertThatThrownBy(() -> suspended.activateVerified(CREATED_AT.plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> blocked.activateVerified(CREATED_AT.plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -54,9 +102,9 @@ class CustomerTest {
     @Test
     void rejectsTransitionsFromTerminalRegistrationState() {
         Customer customer = newCustomer(CustomerType.INDIVIDUAL);
-        customer.activate(Instant.parse("2026-08-08T10:05:00Z"));
+        customer.completeProvisioning(Instant.parse("2026-08-08T10:05:00Z"));
 
-        assertThatThrownBy(() -> customer.activate(Instant.parse("2026-08-08T10:06:00Z")))
+        assertThatThrownBy(() -> customer.completeProvisioning(Instant.parse("2026-08-08T10:06:00Z")))
                 .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> customer.failProvisioning(Instant.parse("2026-08-08T10:06:00Z")))
                 .isInstanceOf(IllegalStateException.class);

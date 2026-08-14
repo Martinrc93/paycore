@@ -87,6 +87,9 @@ class AuthenticationObservabilityTest {
     MeterRegistry meters;
 
     @Autowired
+    AuthenticationMetrics authenticationMetrics;
+
+    @Autowired
     JdbcIndexedSessionRepository sessions;
 
     @Autowired
@@ -187,7 +190,8 @@ class AuthenticationObservabilityTest {
                 .filter(meter -> meter.getId().getName().startsWith("paycore.authentication."))
                 .forEach(meter -> meter.getId().getTags().forEach(tag -> assertThat(tag.getValue())
                         .isIn("authentication_rejected", "refresh_rejected", "customer_unavailable",
-                                "current", "all", "scheduled", "expired")));
+                                "current", "all", "scheduled", "expired", "verified_email",
+                                "email_unverified", "status_changed")));
     }
 
     @Test
@@ -202,6 +206,30 @@ class AuthenticationObservabilityTest {
         assertThat(gauge.value()).isEqualTo(1);
         assertThat(gauge.getId().getDescription())
                 .isEqualTo("Replicated global PostgreSQL active-session count; aggregate replicas with max, never sum");
+    }
+
+    @Test
+    void verificationMetricsUseOnlyBoundedReasonsAndDoNotLogIdentifiers(CapturedOutput output) {
+        double activationsBefore = meters.counter(
+                "paycore.authentication.customer.verification.activations", "reason", "verified_email").count();
+        double denialsBefore = meters.counter(
+                "paycore.authentication.customer.verification.denials", "reason", "email_unverified").count();
+        double conflictsBefore = meters.counter(
+                "paycore.authentication.customer.verification.conflicts", "reason", "status_changed").count();
+
+        authenticationMetrics.pendingCustomerActivated();
+        authenticationMetrics.pendingCustomerDenied();
+        authenticationMetrics.pendingCustomerActivationConflict();
+
+        assertThat(meters.get("paycore.authentication.customer.verification.activations")
+                .tag("reason", "verified_email").counter().count()).isEqualTo(activationsBefore + 1);
+        assertThat(meters.get("paycore.authentication.customer.verification.denials")
+                .tag("reason", "email_unverified").counter().count()).isEqualTo(denialsBefore + 1);
+        assertThat(meters.get("paycore.authentication.customer.verification.conflicts")
+                .tag("reason", "status_changed").counter().count()).isEqualTo(conflictsBefore + 1);
+        assertThat(output.getAll()).doesNotContain(CUSTOMER_ID.toString())
+                .doesNotContain(ISSUER).doesNotContain(SUBJECT).doesNotContain(ACCESS_TOKEN)
+                .doesNotContain(REFRESH_TOKEN).doesNotContain(TOKEN_FRAGMENT);
     }
 
     @Test

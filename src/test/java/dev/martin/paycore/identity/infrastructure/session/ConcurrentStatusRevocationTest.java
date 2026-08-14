@@ -77,6 +77,9 @@ class ConcurrentStatusRevocationTest {
     JdbcIndexedSessionRepository sessions;
 
     @Autowired
+    FindByIndexNameSessionRepository<Session> customerSessions;
+
+    @Autowired
     ChangeCustomerStatusService statusChanges;
 
     @Autowired
@@ -175,15 +178,62 @@ class ConcurrentStatusRevocationTest {
         assertThat(sessions.findById(session.getId())).isNotNull();
     }
 
+    @Test
+    void statusUpdateCommitsBeforeRevocationSoAConcurrentSessionSaveCannotReappear() throws Exception {
+        insertActiveCustomer();
+        Session pendingSession = unsavedAuthenticatedSession();
+        CountDownLatch revocationStarted = new CountDownLatch(1);
+        CountDownLatch releaseRevocation = new CountDownLatch(1);
+        SessionRevocationPort controlledRevocation = new SessionRevocationPort() {
+            @Override
+            public void revokeCurrent(String sessionId) {
+                throw new AssertionError("Current-session revocation was not expected");
+            }
+
+            @Override
+            public void revokeAll(CustomerId customerId) {
+                revocationStarted.countDown();
+                await(releaseRevocation);
+            }
+        };
+        ChangeCustomerStatusService service = new ChangeCustomerStatusService(
+                customers, controlledRevocation, Clock.fixed(NOW, ZoneOffset.UTC));
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            Future<?> statusChange = executor.submit(() -> transaction.executeWithoutResult(
+                    ignored -> service.block(new CustomerId(CUSTOMER_ID))));
+            revocationStarted.await();
+            Future<?> sessionSave = executor.submit(() -> guardedSessionRepository().save(pendingSession));
+            releaseRevocation.countDown();
+            statusChange.get();
+            sessionSave.get();
+        }
+
+        assertThat(customerStatus()).isEqualTo(CustomerStatus.BLOCKED);
+        assertThat(sessions.findById(pendingSession.getId())).isNull();
+    }
+
     private Session authenticatedSession() {
-        Session session = sessionRepository().createSession();
+        Session session = guardedSessionRepository().createSession();
         OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(
                 new CustomerPrincipal(CUSTOMER_ID), List.of(), "paycore");
         session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, CUSTOMER_ID.toString());
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
                 new SecurityContextImpl(authentication));
         session.setAttribute("paycore.authenticated-at", NOW.minus(Duration.ofHours(1)));
-        sessionRepository().save(session);
+        guardedSessionRepository().save(session);
+        return session;
+    }
+
+    private Session unsavedAuthenticatedSession() {
+        Session session = guardedSessionRepository().createSession();
+        OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(
+                new CustomerPrincipal(CUSTOMER_ID), List.of(), "paycore");
+        session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, CUSTOMER_ID.toString());
+        session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
+                new SecurityContextImpl(authentication));
+        session.setAttribute("paycore.authenticated-at", NOW.minus(Duration.ofHours(1)));
         return session;
     }
 
@@ -236,6 +286,11 @@ class ConcurrentStatusRevocationTest {
     @SuppressWarnings("unchecked")
     private SessionRepository<Session> sessionRepository() {
         return (SessionRepository<Session>) (SessionRepository<?>) sessions;
+    }
+
+    @SuppressWarnings("unchecked")
+    private FindByIndexNameSessionRepository<Session> guardedSessionRepository() {
+        return (FindByIndexNameSessionRepository<Session>) customerSessions;
     }
 
     @SuppressWarnings("unchecked")

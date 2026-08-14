@@ -105,7 +105,7 @@ class RegistrationSagaRecoveryTest {
         }
 
         assertThat(value("SELECT state FROM registration_operations")).isEqualTo("COMPLETED");
-        assertThat(value("SELECT status FROM customers")).isEqualTo("ACTIVE");
+        assertThat(value("SELECT status FROM customers")).isEqualTo("PENDING_VERIFICATION");
         assertThat(count("external_identities")).isEqualTo(1);
         assertThat(provisioner.createAttempts.get()).isEqualTo(1);
         if (crashPoint == CrashPoint.USER_CREATE) {

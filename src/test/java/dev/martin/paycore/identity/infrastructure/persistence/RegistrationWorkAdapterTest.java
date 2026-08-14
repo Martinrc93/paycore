@@ -132,7 +132,7 @@ class RegistrationWorkAdapterTest {
         assertThat(workAdapter.complete(linked, NOW.plusSeconds(1))).isTrue();
 
         assertThat(value("SELECT state FROM registration_operations")).isEqualTo("COMPLETED");
-        assertThat(value("SELECT status FROM customers")).isEqualTo("ACTIVE");
+        assertThat(value("SELECT status FROM customers")).isEqualTo("PENDING_VERIFICATION");
     }
 
     @Test
@@ -217,7 +217,7 @@ class RegistrationWorkAdapterTest {
 
         assertThatThrownBy(() -> workAdapter.complete(linked, NOW.plusSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Customer could not be activated");
+                .hasMessage("Customer could not complete provisioning");
 
         assertThat(value("SELECT state FROM registration_operations")).isEqualTo("IDENTITY_LINKED");
         assertThat(value("SELECT status FROM customers")).isEqualTo("PROVISIONING_FAILED");

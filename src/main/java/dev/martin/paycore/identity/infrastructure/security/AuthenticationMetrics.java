@@ -32,6 +32,24 @@ public final class AuthenticationMetrics {
         LOG.info("Authentication event category=customer_access_denial reason=customer_unavailable");
     }
 
+    public void pendingCustomerActivated() {
+        meters.counter("paycore.authentication.customer.verification.activations", "reason", "verified_email")
+                .increment();
+        LOG.info("Authentication event category=customer_verification reason=activation");
+    }
+
+    public void pendingCustomerDenied() {
+        meters.counter("paycore.authentication.customer.verification.denials", "reason", "email_unverified")
+                .increment();
+        LOG.info("Authentication event category=customer_verification reason=email_unverified");
+    }
+
+    public void pendingCustomerActivationConflict() {
+        meters.counter("paycore.authentication.customer.verification.conflicts", "reason", "status_changed")
+                .increment();
+        LOG.info("Authentication event category=customer_verification reason=status_changed");
+    }
+
     public void currentSessionRevoked(int count) {
         sessionRevoked("current", count);
     }

@@ -1,10 +1,13 @@
 package dev.martin.paycore.identity.infrastructure.security;
 
 import dev.martin.paycore.identity.application.authentication.CustomerAccess;
+import dev.martin.paycore.identity.application.authentication.AuthenticateCustomerService;
 import dev.martin.paycore.identity.application.authentication.ResolveCustomerAccess;
 import dev.martin.paycore.identity.application.authentication.ResolveCustomerAccessService;
 import dev.martin.paycore.identity.application.authentication.SessionLifetimePolicy;
+import dev.martin.paycore.identity.application.authentication.VerifiedCustomerLogin;
 import dev.martin.paycore.identity.application.port.out.CustomerAccessRepository;
+import dev.martin.paycore.identity.application.port.out.CustomerActivationPort;
 import dev.martin.paycore.identity.application.port.out.SessionRevocationPort;
 import dev.martin.paycore.identity.domain.model.ExternalIdentity;
 import jakarta.servlet.DispatcherType;
@@ -13,6 +16,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.time.Clock;
+import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -67,6 +71,13 @@ public class AuthenticationSecurityConfiguration {
     @ConditionalOnMissingBean
     ResolveCustomerAccess resolveCustomerAccess(CustomerAccessRepository repository) {
         return new ResolveCustomerAccessService(repository);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    AuthenticateCustomerService authenticateCustomerService(
+            CustomerAccessRepository accessRepository, CustomerActivationPort activationPort) {
+        return new AuthenticateCustomerService(accessRepository, activationPort);
     }
 
     @Bean
@@ -146,8 +157,10 @@ public class AuthenticationSecurityConfiguration {
 
     @Bean
     CustomerOidcAuthenticationSuccessHandler customerOidcAuthenticationSuccessHandler(
-            Clock clock, SessionLifetimePolicy lifetimePolicy, AuthenticationNavigationProperties navigation) {
-        return new CustomerOidcAuthenticationSuccessHandler(clock, lifetimePolicy, navigation.successUri());
+            Clock clock, SessionLifetimePolicy lifetimePolicy, AuthenticationNavigationProperties navigation,
+            ResolveCustomerAccess customerAccess) {
+        return new CustomerOidcAuthenticationSuccessHandler(
+                clock, lifetimePolicy, navigation.successUri(), customerAccess);
     }
 
     @Bean
@@ -157,8 +170,10 @@ public class AuthenticationSecurityConfiguration {
             OAuth2AuthorizedClientManager authorizedClientManager,
             SecurityContextRepository securityContexts,
             ResolveCustomerAccess customerAccess,
+            AuthenticateCustomerService authenticateCustomer,
             SessionRevocationPort sessions,
             SessionLifetimePolicy lifetimePolicy,
+            Clock clock,
             CustomerOidcAuthenticationSuccessHandler successHandler,
             AuthenticationNavigationProperties navigation,
             RequestMatcher publicRequests,
@@ -237,11 +252,11 @@ public class AuthenticationSecurityConfiguration {
                         .failureHandler((request, response, exception) -> authenticationFailure(response, metrics))
                         .withObjectPostProcessor(new ObjectPostProcessor<OAuth2LoginAuthenticationFilter>() {
                             @Override
-                            public <O extends OAuth2LoginAuthenticationFilter> O postProcess(O filter) {
-                                filter.setAuthenticationResultConverter(authentication ->
-                                        localAuthentication(authentication, customerAccess, metrics));
-                                return filter;
-                            }
+                                public <O extends OAuth2LoginAuthenticationFilter> O postProcess(O filter) {
+                                    filter.setAuthenticationResultConverter(authentication ->
+                                        localAuthentication(authentication, customerAccess, authenticateCustomer, metrics, clock));
+                                    return filter;
+                                }
                         }))
                 .addFilterAfter(lifetimeFilter, SecurityContextHolderFilter.class)
                 .addFilterAfter(statusFilter, SessionLifetimeFilter.class)
@@ -250,16 +265,31 @@ public class AuthenticationSecurityConfiguration {
     }
 
     private static OAuth2AuthenticationToken localAuthentication(OAuth2LoginAuthenticationToken authentication,
-            ResolveCustomerAccess resolver, AuthenticationMetrics metrics) {
+            ResolveCustomerAccess resolver, AuthenticateCustomerService authenticateCustomer,
+            AuthenticationMetrics metrics, Clock clock) {
         OidcUser oidcUser = (OidcUser) authentication.getPrincipal();
         ExternalIdentity identity = new ExternalIdentity(
                 oidcUser.getIssuer().toExternalForm(), oidcUser.getSubject());
-        CustomerAccess access = resolver.resolve(identity)
-                .filter(CustomerAccess::isActive)
+        boolean pending = resolver.resolve(identity)
+                .map(access -> access.status() == dev.martin.paycore.identity.domain.model.CustomerStatus.PENDING_VERIFICATION)
+                .orElse(false);
+        Optional<CustomerAccess> authenticated = authenticateCustomer.authenticate(new VerifiedCustomerLogin(
+                identity, Boolean.TRUE.equals(oidcUser.getEmailVerified()), clock.instant()));
+        CustomerAccess access = authenticated
                 .orElseThrow(() -> {
+                    if (pending) {
+                        if (Boolean.TRUE.equals(oidcUser.getEmailVerified())) {
+                            metrics.pendingCustomerActivationConflict();
+                        } else {
+                            metrics.pendingCustomerDenied();
+                        }
+                    }
                     metrics.customerAccessDenied();
                     return new OAuth2AuthenticationException(new OAuth2Error("access_denied"));
                 });
+        if (pending) {
+            metrics.pendingCustomerActivated();
+        }
         CustomerPrincipal principal = new CustomerPrincipal(access.customerId().value());
         return new OAuth2AuthenticationToken(
                 principal, principal.getAuthorities(), authentication.getClientRegistration().getRegistrationId());

@@ -8,6 +8,7 @@
 - Use startup `--import-realm` only to create an absent realm. Keycloak 26.5.2 skips an existing realm during startup import; use the existing-realm procedure below for updates.
 - Apply Flyway migrations and verify PostgreSQL connectivity before enabling authentication. Do not let Spring initialize the session schema.
 - Keep login disabled until discovery, JWKS, Authorization Code + PKCE, database, cookie, cleanup, and rollback checks pass.
+- Apply the verified-activation migration as a coordinated stop-the-world change. Old replicas must be stopped before V4 because they cannot read `PENDING_VERIFICATION` or safely write the new lifecycle.
 
 ## Exact Configuration
 
@@ -234,6 +235,9 @@ Alert on rate changes, sustained non-zero failures, cleanup backlog, and unexpec
 | `paycore.authentication.login.failures` | `reason=authentication_rejected` | OIDC callback or local login rejection. |
 | `paycore.authentication.refresh.failures` | `reason=refresh_rejected` | Server-side token renewal failed and the local session was invalidated. |
 | `paycore.authentication.customer.access.denials` | `reason=customer_unavailable` | A linked login or protected session could not obtain active Customer access. |
+| `paycore.authentication.customer.verification.activations` | `reason=verified_email` | A pending Customer was activated by validated OIDC evidence. |
+| `paycore.authentication.customer.verification.denials` | `reason=email_unverified` | Pending activation was denied because verified-email evidence was false or absent. |
+| `paycore.authentication.customer.verification.conflicts` | `reason=status_changed` | A pending activation lost a compare-and-set race with another Customer status change. |
 | `paycore.authentication.session.revocations` | `scope=current|all` | Revocation operations requested. |
 | `paycore.authentication.sessions.revoked` | `scope=current|all` | Session rows actually deleted by those operations. |
 | `paycore.authentication.session.cleanup.runs` | `reason=scheduled` | Bounded expired-session cleanup executions. |
@@ -279,20 +283,32 @@ Do not attempt to transform or log serialized token attributes. Compatible rolli
 
 ## Rollout Gates
 
-1. Apply Flyway migrations with `PAYCORE_AUTHENTICATION_ENABLED=false`; never edit or revert released migrations.
-2. Create an absent realm with fresh startup import or update an existing realm with the supported admin/offline procedure above. Verify the confidential `paycore-bff` client, exact HTTPS redirect/origin, standard flow only, PKCE S256, bounded lifetimes, and deployment secret.
-3. Verify TLS certificates, exact issuer discovery, JWKS reachability, trusted proxy stripping, and same-site external URLs from every PayCore instance.
-4. Run the real Keycloak authentication contract, focused observability tests, prior OIDC/security/session regressions, architecture tests, and the full test suite with Docker.
-5. Verify database least privilege, encrypted connection, encrypted backup, restore access controls, and cleanup queries.
-6. Enable login for a canary pool. Complete login, refresh, protected request, CSRF-protected local logout, invalid credentials, Customer denial, and session invalidation checks.
-7. Confirm metrics/logs contain only fixed categories and reasons and no representative secret values.
-8. Expand traffic while monitoring login/refresh failures, active sessions, revocation counts, cleanup runs, and expired backlog.
+1. Stop every old PayCore application replica and registration worker. Do not admit traffic from an old process after V4.
+2. Set `PAYCORE_AUTHENTICATION_ENABLED=false`, drain login/callback traffic, and take an encrypted PostgreSQL backup.
+3. Record Customer status and active-session counts before migration:
+
+   ```sql
+   SELECT status, count(*) AS customers FROM customers GROUP BY status ORDER BY status;
+   SELECT count(*) AS active_sessions FROM spring_session
+   WHERE expiry_time >= (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+   ```
+
+4. Apply Flyway V4 with authentication disabled. Verify all former `ACTIVE` Customers are `PENDING_VERIFICATION`, their sessions are gone, no `ACTIVE` Customer survived unexpectedly, and every other status was preserved.
+5. Create an absent realm with fresh startup import or update an existing realm with the supported admin/offline procedure above. Verify the confidential `paycore-bff` client, exact HTTPS redirect/origin, standard flow only, PKCE S256, bounded lifetimes, and deployment secret.
+6. Verify TLS certificates, exact issuer discovery, JWKS reachability, trusted proxy stripping, and same-site external URLs from every PayCore instance.
+7. Run the real Keycloak authentication contract, focused observability tests, prior OIDC/security/session regressions, architecture tests, and the full test suite with Docker.
+8. Verify database least privilege, encrypted connection, encrypted backup, restore access controls, and cleanup queries.
+9. Enable login for a canary pool. Require forced OIDC reauthentication; only validated `email_verified=true` evidence restores migrated Customers to `ACTIVE`.
+10. Complete login, refresh, protected request, CSRF-protected local logout, invalid credentials, Customer denial, and session invalidation checks.
+11. Confirm metrics/logs contain only fixed categories and reasons and no representative secret values.
+12. Expand traffic while monitoring verification activations, unverified denials, activation conflicts, login/refresh failures, active sessions, revocation counts, cleanup runs, and expired backlog.
 
 ## Rollback
 
 1. Set `PAYCORE_AUTHENTICATION_ENABLED=false` first so no new browser login starts.
 2. Remove authentication traffic from the affected deployment and invalidate all PayCore sessions with `DELETE FROM spring_session`; verify FK-cascaded attributes are zero.
-3. Do not revert, delete, or edit Flyway migrations. Leave session tables unused if the previous application does not authenticate Customers.
-4. Roll back application or non-secret realm configuration only when issuer, client, redirect, signing keys, and persisted identity links remain compatible.
-5. Do not remove an overlapping signing key until all tokens that require it are gone. Client secrets have no assumed overlap and must use the disabled-login maintenance procedure.
-6. Verify login remains disabled, stale cookies receive HTTP 401, and cleanup/session counts stabilize before declaring rollback complete.
+3. Do not revert, delete, or edit Flyway migrations. After V4, the previous application is incompatible with `PENDING_VERIFICATION` and must not be restarted.
+4. Use a forward fix or restore the matching pre-migration database backup with the matching application version. Never bulk-restore migrated Customers to `ACTIVE` without verified evidence.
+5. Roll back non-secret realm configuration only when issuer, client, redirect, signing keys, and persisted identity links remain compatible.
+6. Do not remove an overlapping signing key until all tokens that require it are gone. Client secrets have no assumed overlap and must use the disabled-login maintenance procedure.
+7. Verify login remains disabled, stale cookies receive HTTP 401, and cleanup/session counts stabilize before declaring rollback complete.

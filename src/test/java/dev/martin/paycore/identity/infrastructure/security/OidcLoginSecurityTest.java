@@ -222,6 +222,42 @@ class OidcLoginSecurityTest {
         assertThat(reauthenticated.getMaxInactiveInterval()).isEqualTo(Duration.ofMinutes(30));
     }
 
+    @Test
+    void pendingCustomerWithVerifiedEmailIsActivatedBeforeSessionCreation() throws Exception {
+        UUID customerId = UUID.fromString("10000000-0000-0000-0000-000000000010");
+        linkCustomer(customerId, CustomerStatus.PENDING_VERIFICATION, PROVIDER.subject());
+
+        MvcResult result = callback(loginStart(), "verified-pending-code");
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(302);
+        assertThat(requiredSessionCookie(result)).isNotNull();
+        assertThat(customerStatus(customerId)).isEqualTo(CustomerStatus.ACTIVE);
+    }
+
+    @Test
+    void pendingCustomerWithUnverifiedEmailIsDeniedWithoutSession() throws Exception {
+        UUID customerId = UUID.fromString("10000000-0000-0000-0000-000000000011");
+        linkCustomer(customerId, CustomerStatus.PENDING_VERIFICATION, PROVIDER.subject());
+        PROVIDER.useEmailVerified(false);
+
+        MvcResult result = callback(loginStart(), "unverified-pending-code");
+
+        assertSanitizedForbiddenWithoutAcceptedSession(result);
+        assertThat(customerStatus(customerId)).isEqualTo(CustomerStatus.PENDING_VERIFICATION);
+    }
+
+    @Test
+    void pendingCustomerWithMissingEmailVerificationClaimIsDeniedWithoutSession() throws Exception {
+        UUID customerId = UUID.fromString("10000000-0000-0000-0000-000000000012");
+        linkCustomer(customerId, CustomerStatus.PENDING_VERIFICATION, PROVIDER.subject());
+        PROVIDER.useEmailVerified(null);
+
+        MvcResult result = callback(loginStart(), "missing-verification-code");
+
+        assertSanitizedForbiddenWithoutAcceptedSession(result);
+        assertThat(customerStatus(customerId)).isEqualTo(CustomerStatus.PENDING_VERIFICATION);
+    }
+
     @ParameterizedTest
     @EnumSource(value = CustomerStatus.class, names = {"PROVISIONING", "PROVISIONING_FAILED", "SUSPENDED", "BLOCKED"})
     void inactiveCustomersReceiveTheSameSanitizedForbiddenResponse(CustomerStatus status) throws Exception {
@@ -406,6 +442,11 @@ class OidcLoginSecurityTest {
                 .param("customerId", customerId)
                 .param("now", OffsetDateTime.ofInstant(AUTHENTICATED_AT, ZoneOffset.UTC))
                 .update();
+    }
+
+    private CustomerStatus customerStatus(UUID customerId) {
+        return CustomerStatus.valueOf(jdbcClient.sql("SELECT status FROM customers WHERE id=:id")
+                .param("id", customerId).query(String.class).single());
     }
 
     private static Map<String, String> queryParameters(String location) {

@@ -8,6 +8,7 @@
 - Configure Keycloak SMTP and verify delivery of `VERIFY_EMAIL` and `UPDATE_PASSWORD` actions.
 - The `paycore-provisioner` service account must have exactly the `manage-users` realm-management role.
 - Keep the registration endpoint and worker disabled until database, Keycloak, SMTP, and contract checks pass.
+- `PENDING_VERIFICATION` is the expected post-provisioning state. Registration completion must never write `ACTIVE`.
 
 ## Configuration
 
@@ -39,7 +40,16 @@ Source throttling uses the servlet remote address. When deployed behind a proxy,
 
 ## Monitoring
 
-Monitor oldest due queue age, due operation count, expired leases, reconciliation count, retry-alert rate, and completion throughput. Do not use email, raw idempotency keys, external subjects, credentials, tokens, or response bodies as metric labels.
+Monitor oldest due queue age, due operation count, expired leases, reconciliation count, retry-alert rate, completion throughput, and the counts of `PENDING_VERIFICATION` and `ACTIVE` Customers. Do not use email, raw idempotency keys, external subjects, credentials, tokens, or response bodies as metric labels.
+
+During the verified-activation migration, record these counts before and after Flyway. After migration, the `ACTIVE` count must be zero until verified logins restore access; every migrated Customer must be reauthenticated through OIDC with `email_verified=true`.
+
+```sql
+SELECT status, count(*) AS customers
+FROM customers
+GROUP BY status
+ORDER BY status;
+```
 
 ```sql
 SELECT count(*) AS due_operations,
@@ -87,18 +97,30 @@ Alert when queue age exceeds the expected email-delivery objective, expired leas
 
 ## Rollout
 
-1. Apply Flyway migrations with registration and worker disabled.
-2. Import and validate the Keycloak realm, exact redirect, user-profile ownership attribute, SMTP, and service-account role.
-3. Run PostgreSQL integration/concurrency and Keycloak 26.5.2 contract tests.
-4. Enable the worker while the public endpoint remains disabled.
-5. Verify claims, lease renewal, retry alerts, queue age, identity links, and required-action delivery.
-6. Enable the public endpoint and monitor generic `202`/`429` behavior and queue health.
+1. Stop every old PayCore application replica and registration worker. Do not use a rolling deployment: old replicas can write `ACTIVE` and cannot deserialize `PENDING_VERIFICATION`.
+2. Disable registration and authentication, drain callbacks and protected traffic, and take an encrypted PostgreSQL backup.
+3. Record Customer status counts and active-session counts without selecting session attributes:
+
+   ```sql
+   SELECT status, count(*) AS customers FROM customers GROUP BY status ORDER BY status;
+   SELECT count(*) AS active_sessions FROM spring_session
+   WHERE expiry_time >= (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+   ```
+
+4. Apply Flyway V4 with the new application while registration and the worker remain disabled. Verify migrated Customers are `PENDING_VERIFICATION`, migrated sessions are absent, and non-active statuses are unchanged.
+5. Import and validate the Keycloak realm, exact redirect, user-profile ownership attribute, SMTP, and service-account role.
+6. Run PostgreSQL integration/concurrency and Keycloak 26.5.2 contract tests. Confirm no old process remains before admitting traffic.
+7. Enable the worker while the public endpoint remains disabled. Monitor queue age, retries, identity links, required-action delivery, and verification/activation metrics.
+8. Require forced OIDC reauthentication for migrated Customers; only `email_verified=true` may restore `ACTIVE` access.
+9. Enable the public endpoint and monitor generic `202`/`429` behavior, queue health, Customer status counts, and authentication denials.
 
 ## Rollback
 
 1. Disable `PAYCORE_REGISTRATION_ENABLED` to stop accepting new work.
 2. Disable `PAYCORE_REGISTRATION_WORKER_ENABLED` to stop remote side effects.
-3. Do not revert or edit released Flyway migrations and do not delete Customers, operations, or identity links.
-4. Allow active remote calls to finish within their bounded timeout and leases to expire.
-5. Reconcile claimed, identity-linked, and reconciliation-required operations before re-enabling.
-6. Restore the previous application and realm configuration only if it remains compatible with persisted issuer/subject links and digest versions.
+3. If V4 has run, keep the new application compatible with `PENDING_VERIFICATION`; the previous application is not a valid rollback target.
+4. Do not revert or edit released Flyway migrations and do not bulk-restore Customers to `ACTIVE` or delete identity links.
+5. Use a forward fix or restore the matching pre-migration database backup with the matching application version; reauthentication is the only normal path back to `ACTIVE`.
+6. Allow active remote calls to finish within their bounded timeout and leases to expire.
+7. Reconcile claimed, identity-linked, and reconciliation-required operations before re-enabling.
+8. Restore the previous application and realm configuration only before V4 runs and only if it remains compatible with persisted issuer/subject links and digest versions.

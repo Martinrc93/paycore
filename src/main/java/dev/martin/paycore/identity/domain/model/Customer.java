@@ -31,12 +31,16 @@ public final class Customer {
         return new Customer(id, email, type, status, createdAt, updatedAt);
     }
 
-    public void activate(Instant now) {
-        transitionTo(CustomerStatus.ACTIVE, now);
+    public void completeProvisioning(Instant now) {
+        transitionFrom(CustomerStatus.PROVISIONING, CustomerStatus.PENDING_VERIFICATION, now);
+    }
+
+    public void activateVerified(Instant now) {
+        transitionFrom(CustomerStatus.PENDING_VERIFICATION, CustomerStatus.ACTIVE, now);
     }
 
     public void failProvisioning(Instant now) {
-        transitionTo(CustomerStatus.PROVISIONING_FAILED, now);
+        transitionFrom(CustomerStatus.PROVISIONING, CustomerStatus.PROVISIONING_FAILED, now);
     }
 
     public void suspend(Instant now) {
@@ -47,9 +51,9 @@ public final class Customer {
         transitionActiveTo(CustomerStatus.BLOCKED, now);
     }
 
-    private void transitionTo(CustomerStatus target, Instant now) {
-        if (status != CustomerStatus.PROVISIONING) {
-            throw new IllegalStateException("Customer registration is no longer provisioning");
+    private void transitionFrom(CustomerStatus expected, CustomerStatus target, Instant now) {
+        if (status != expected) {
+            throw new IllegalStateException("Customer cannot transition from " + status + " to " + target);
         }
         status = target;
         updatedAt = Objects.requireNonNull(now, "now");

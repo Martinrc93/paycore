@@ -3,7 +3,12 @@ package dev.martin.paycore.identity.infrastructure.session;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.martin.paycore.identity.domain.model.CustomerId;
+import dev.martin.paycore.identity.domain.model.CustomerStatus;
+import dev.martin.paycore.identity.application.authentication.SessionLifetimePolicy;
 import java.time.Duration;
+import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -12,12 +17,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
 import org.springframework.session.jdbc.JdbcIndexedSessionRepository;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -27,6 +38,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
         "spring.jpa.hibernate.ddl-auto=validate",
         "spring.task.scheduling.enabled=false"
 })
+@Import(SpringSessionRevocationAdapterTest.GuardedSessionConfiguration.class)
 class SpringSessionRevocationAdapterTest {
 
     @Container
@@ -42,7 +54,13 @@ class SpringSessionRevocationAdapterTest {
     JdbcIndexedSessionRepository repository;
 
     @Autowired
+    FindByIndexNameSessionRepository<Session> guardedRepository;
+
+    @Autowired
     JdbcClient jdbcClient;
+
+    @Autowired
+    PlatformTransactionManager transactionManager;
 
     @BeforeEach
     void cleanSessions() {
@@ -119,6 +137,47 @@ class SpringSessionRevocationAdapterTest {
     }
 
     @Test
+    void doesNotPersistASessionForAnIneligibleCustomer() {
+        CustomerId customerId = customerId(40);
+        insertCustomer(customerId, CustomerStatus.BLOCKED);
+        Session session = session(customerId, "blocked-token");
+
+        sessions().save(session);
+
+        assertThat(sessions().findById(session.getId())).isNull();
+    }
+
+    @Test
+    void statusChangeAndSessionSaveSerializeOnTheCustomerRow() throws Exception {
+        CustomerId customerId = customerId(41);
+        Session session = session(customerId, "racing-token");
+        CountDownLatch customerLocked = new CountDownLatch(1);
+        CountDownLatch releaseStatusChange = new CountDownLatch(1);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            Future<?> statusChange = executor.submit(() -> new TransactionTemplate(transactionManager)
+                    .executeWithoutResult(ignored -> {
+                        jdbcClient.sql("SELECT id FROM customers WHERE id=:id FOR UPDATE")
+                                .param("id", customerId.value()).query(UUID.class).single();
+                        customerLocked.countDown();
+                        await(releaseStatusChange);
+                        jdbcClient.sql("UPDATE customers SET status='BLOCKED', updated_at=:now, version=version+1 WHERE id=:id")
+                                .param("now", OffsetDateTime.now(ZoneOffset.UTC))
+                                .param("id", customerId.value()).update();
+                        jdbcClient.sql("DELETE FROM spring_session WHERE principal_name=:principal")
+                                .param("principal", customerId.value().toString()).update();
+                    }));
+            customerLocked.await();
+            Future<?> sessionSave = executor.submit(() -> sessions().save(session));
+            releaseStatusChange.countDown();
+            statusChange.get();
+            sessionSave.get();
+        }
+
+        assertThat(sessions().findById(session.getId())).isNull();
+    }
+
+    @Test
     void cleanupDeletesExpiredSessionAndItsPersistedTokenAttributes() {
         Session expired = sessions().createSession();
         expired.setAttribute("access-token", "expired-access-token");
@@ -140,6 +199,7 @@ class SpringSessionRevocationAdapterTest {
     }
 
     private Session session(CustomerId customerId, String token) {
+        insertActiveCustomerIfAbsent(customerId);
         Session session = sessions().createSession();
         session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME,
                 customerId.value().toString());
@@ -157,6 +217,15 @@ class SpringSessionRevocationAdapterTest {
         }
     }
 
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(exception);
+        }
+    }
+
     private long sessionCount() {
         return jdbcClient.sql("SELECT count(*) FROM spring_session").query(Long.class).single();
     }
@@ -165,9 +234,33 @@ class SpringSessionRevocationAdapterTest {
         return jdbcClient.sql("SELECT count(*) FROM spring_session_attributes").query(Long.class).single();
     }
 
+    private void insertCustomer(CustomerId customerId, CustomerStatus status) {
+        jdbcClient.sql("""
+                        INSERT INTO customers (id, email, customer_type, status, created_at, updated_at)
+                        VALUES (:id, :email, 'INDIVIDUAL', :status, :now, :now)
+                        """)
+                .param("id", customerId.value())
+                .param("email", customerId + "@example.test")
+                .param("status", status.name())
+                .param("now", OffsetDateTime.now(ZoneOffset.UTC))
+                .update();
+    }
+
+    private void insertActiveCustomerIfAbsent(CustomerId customerId) {
+        jdbcClient.sql("""
+                        INSERT INTO customers (id, email, customer_type, status, created_at, updated_at)
+                        VALUES (:id, :email, 'INDIVIDUAL', 'ACTIVE', :now, :now)
+                        ON CONFLICT (id) DO NOTHING
+                        """)
+                .param("id", customerId.value())
+                .param("email", customerId + "@example.test")
+                .param("now", OffsetDateTime.now(ZoneOffset.UTC))
+                .update();
+    }
+
     @SuppressWarnings("unchecked")
     private SessionRepository<Session> sessions() {
-        return (SessionRepository<Session>) (SessionRepository<?>) repository;
+        return (SessionRepository<Session>) (SessionRepository<?>) guardedRepository;
     }
 
     @SuppressWarnings("unchecked")
@@ -177,5 +270,20 @@ class SpringSessionRevocationAdapterTest {
 
     private static CustomerId customerId(long value) {
         return new CustomerId(new UUID(0, value));
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class GuardedSessionConfiguration {
+
+        @Bean
+        @Primary
+        FindByIndexNameSessionRepository<Session> guardedRepository(
+                JdbcIndexedSessionRepository delegate, JdbcClient jdbcClient,
+                PlatformTransactionManager transactionManager) {
+            Clock clock = Clock.fixed(java.time.Instant.parse("2026-08-14T12:00:00Z"), ZoneOffset.UTC);
+            return new AbsoluteExpirySessionRepository(
+                    delegate, jdbcClient, new SessionLifetimePolicy(clock),
+                    new TransactionTemplate(transactionManager));
+        }
     }
 }

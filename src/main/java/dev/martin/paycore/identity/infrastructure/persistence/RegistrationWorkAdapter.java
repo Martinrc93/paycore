@@ -147,14 +147,14 @@ public class RegistrationWorkAdapter implements RegistrationWorkPort {
             return false;
         }
         int activated = jdbcClient.sql("""
-                        UPDATE customers SET status='ACTIVE', updated_at=:now, version=version+1
+                        UPDATE customers SET status='PENDING_VERIFICATION', updated_at=:now, version=version+1
                         WHERE id=:customerId AND status='PROVISIONING'
                         """)
                 .param("now", atUtc(now), Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("customerId", claim.customerId().value())
                 .update();
         if (activated != 1) {
-            throw new IllegalStateException("Customer could not be activated");
+            throw new IllegalStateException("Customer could not complete provisioning");
         }
         return true;
     }

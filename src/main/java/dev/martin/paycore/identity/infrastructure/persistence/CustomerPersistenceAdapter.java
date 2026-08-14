@@ -27,7 +27,7 @@ public class CustomerPersistenceAdapter implements CustomerRepository {
                 .orElseThrow(() -> new IllegalStateException("Customer disappeared during status change"));
         entity.status = customer.status();
         entity.updatedAt = customer.updatedAt();
-        repository.save(entity);
+        repository.saveAndFlush(entity);
     }
 
     private static Customer toDomain(CustomerEntity entity) {

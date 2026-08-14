@@ -34,6 +34,7 @@ final class OidcProvider {
     private final AtomicReference<String> nonce = new AtomicReference<>("missing-nonce");
     private final AtomicReference<String> subject = new AtomicReference<>(SUBJECT);
     private final AtomicReference<String> audience = new AtomicReference<>("paycore-test");
+    private final AtomicReference<Boolean> emailVerified = new AtomicReference<>(true);
     private final AtomicBoolean rejectRefresh = new AtomicBoolean();
     private final AtomicInteger refreshRequests = new AtomicInteger();
 
@@ -71,6 +72,10 @@ final class OidcProvider {
         audience.set(value);
     }
 
+    void useEmailVerified(Boolean value) {
+        emailVerified.set(value);
+    }
+
     void rejectRefresh() {
         rejectRefresh.set(true);
     }
@@ -83,6 +88,7 @@ final class OidcProvider {
         nonce.set("missing-nonce");
         subject.set(SUBJECT);
         audience.set("paycore-test");
+        emailVerified.set(true);
         rejectRefresh.set(false);
         refreshRequests.set(0);
     }
@@ -122,14 +128,17 @@ final class OidcProvider {
         }
         try {
             Instant now = Instant.now();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder()
+            JWTClaimsSet.Builder claimsBuilder = new JWTClaimsSet.Builder()
                     .issuer(issuer())
                     .subject(subject.get())
                     .audience(audience.get())
                     .issueTime(java.util.Date.from(now.minusSeconds(30)))
                     .expirationTime(java.util.Date.from(now.plusSeconds(300)))
-                    .claim("nonce", nonce.get())
-                    .build();
+                    .claim("nonce", nonce.get());
+            if (emailVerified.get() != null) {
+                claimsBuilder.claim("email_verified", emailVerified.get());
+            }
+            JWTClaimsSet claims = claimsBuilder.build();
             SignedJWT idToken = new SignedJWT(
                     new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(), claims);
             idToken.sign(new RSASSASigner(signingKey));
