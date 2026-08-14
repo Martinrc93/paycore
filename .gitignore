@@ -22,7 +22,7 @@ target/
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
-/dist/
+/dist/S
 /nbdist/
 /.nb-gradle/
 build/
@@ -35,3 +35,4 @@ build/
 ###opencode###
 .opencode
 
+docs/superpowers/specs/2026-08-11-paycore-roadmap-design.md
