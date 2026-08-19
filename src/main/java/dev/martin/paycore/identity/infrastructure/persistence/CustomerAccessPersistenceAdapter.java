@@ -2,7 +2,6 @@ package dev.martin.paycore.identity.infrastructure.persistence;
 
 import dev.martin.paycore.identity.application.authentication.CustomerAccess;
 import dev.martin.paycore.identity.application.port.out.CustomerAccessRepository;
-import dev.martin.paycore.identity.application.port.out.CustomerActivationPort;
 import dev.martin.paycore.identity.domain.model.CustomerId;
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import dev.martin.paycore.identity.domain.model.ExternalIdentity;
@@ -14,10 +13,9 @@ import java.time.ZoneOffset;
 import java.sql.Types;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 @Component
-public class CustomerAccessPersistenceAdapter implements CustomerAccessRepository, CustomerActivationPort {
+public class CustomerAccessPersistenceAdapter implements CustomerAccessRepository {
 
     private final JdbcClient jdbcClient;
 
@@ -47,9 +45,14 @@ public class CustomerAccessPersistenceAdapter implements CustomerAccessRepositor
                 .optional();
     }
 
-    @Override
-    @Transactional
-    public Optional<CustomerAccess> activatePending(CustomerId customerId, Instant activatedAt) {
+    Optional<CustomerAccess> lockByCustomerId(CustomerId customerId) {
+        return jdbcClient.sql("SELECT id, status FROM customers WHERE id = :id FOR UPDATE")
+                .param("id", customerId.value())
+                .query(this::mapAccess)
+                .optional();
+    }
+
+    Optional<CustomerAccess> activatePendingIfCurrent(CustomerId customerId, Instant activatedAt) {
         int updated = jdbcClient.sql("""
                         UPDATE customers
                            SET status='ACTIVE', updated_at=:activatedAt, version=version+1

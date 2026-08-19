@@ -10,6 +10,7 @@ import dev.martin.paycore.identity.application.port.out.CustomerAccessRepository
 import dev.martin.paycore.identity.application.port.out.CustomerActivationPort;
 import dev.martin.paycore.identity.application.port.out.SessionRevocationPort;
 import dev.martin.paycore.identity.domain.model.ExternalIdentity;
+import dev.martin.paycore.wallet.application.query.WalletAccess;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -158,9 +159,9 @@ public class AuthenticationSecurityConfiguration {
     @Bean
     CustomerOidcAuthenticationSuccessHandler customerOidcAuthenticationSuccessHandler(
             Clock clock, SessionLifetimePolicy lifetimePolicy, AuthenticationNavigationProperties navigation,
-            ResolveCustomerAccess customerAccess) {
+            ResolveCustomerAccess customerAccess, WalletAccess wallets) {
         return new CustomerOidcAuthenticationSuccessHandler(
-                clock, lifetimePolicy, navigation.successUri(), customerAccess);
+                clock, lifetimePolicy, navigation.successUri(), customerAccess, wallets);
     }
 
     @Bean
@@ -175,6 +176,7 @@ public class AuthenticationSecurityConfiguration {
             SessionLifetimePolicy lifetimePolicy,
             Clock clock,
             CustomerOidcAuthenticationSuccessHandler successHandler,
+            WalletAccess wallets,
             AuthenticationNavigationProperties navigation,
             RequestMatcher publicRequests,
             AuthenticationMetrics metrics) throws Exception {
@@ -193,7 +195,7 @@ public class AuthenticationSecurityConfiguration {
         JsonAuthenticationEntryPoint authenticationEntryPoint = new JsonAuthenticationEntryPoint();
         JsonAccessDeniedHandler accessDeniedHandler = new JsonAccessDeniedHandler();
         SessionLifetimeFilter lifetimeFilter = new SessionLifetimeFilter(lifetimePolicy, publicRequests);
-        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, sessions, publicRequests, metrics);
+        CustomerStatusFilter statusFilter = new CustomerStatusFilter(customerAccess, wallets, sessions, publicRequests, metrics);
         OAuth2RefreshFilter refreshFilter =
                 new OAuth2RefreshFilter(authorizedClientManager, authorizedClients, publicRequests, metrics);
 
@@ -249,7 +251,8 @@ public class AuthenticationSecurityConfiguration {
                         .authorizationEndpoint(endpoint ->
                                 endpoint.authorizationRequestResolver(authorizationRequests))
                         .successHandler(successHandler)
-                        .failureHandler((request, response, exception) -> authenticationFailure(response, metrics))
+                        .failureHandler((request, response, exception) ->
+                                authenticationFailure(request, response, metrics))
                         .withObjectPostProcessor(new ObjectPostProcessor<OAuth2LoginAuthenticationFilter>() {
                             @Override
                                 public <O extends OAuth2LoginAuthenticationFilter> O postProcess(O filter) {
@@ -301,9 +304,19 @@ public class AuthenticationSecurityConfiguration {
                 && authentication.getPrincipal() instanceof CustomerPrincipal;
     }
 
-    private static void authenticationFailure(HttpServletResponse response, AuthenticationMetrics metrics)
+    private static void authenticationFailure(HttpServletRequest request, HttpServletResponse response,
+            AuthenticationMetrics metrics)
             throws IOException {
         metrics.loginFailure();
+        SecurityContextHolder.clearContext();
+        HttpSession session = request.getSession(false);
+        if (session != null) {
+            try {
+                session.invalidate();
+            } catch (IllegalStateException ignored) {
+                // The transient callback session may already have been removed.
+            }
+        }
         SecurityResponses.forbidden(response);
     }
 

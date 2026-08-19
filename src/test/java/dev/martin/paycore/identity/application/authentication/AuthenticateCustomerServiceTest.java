@@ -40,10 +40,12 @@ class AuthenticateCustomerServiceTest {
     @Test
     void resolvesLinkedActiveCustomer() {
         accessRepository.link(IDENTITY, new CustomerAccess(CUSTOMER_ID, CustomerStatus.ACTIVE));
+        activationPort.activeResult = Optional.of(new CustomerAccess(CUSTOMER_ID, CustomerStatus.ACTIVE));
 
         assertThat(service.authenticate(new VerifiedCustomerLogin(IDENTITY, false, NOW)))
                 .contains(new CustomerAccess(CUSTOMER_ID, CustomerStatus.ACTIVE));
-        assertThat(activationPort.calls).isZero();
+        assertThat(activationPort.activeCalls).isEqualTo(1);
+        assertThat(activationPort.customerId).isEqualTo(CUSTOMER_ID);
     }
 
     @Test
@@ -63,6 +65,14 @@ class AuthenticateCustomerServiceTest {
 
         assertThat(service.authenticate(new VerifiedCustomerLogin(IDENTITY, false, NOW))).isEmpty();
         assertThat(activationPort.calls).isZero();
+    }
+
+    @Test
+    void deniesLinkedActiveCustomerWithoutACompleteWallet() {
+        accessRepository.link(IDENTITY, new CustomerAccess(CUSTOMER_ID, CustomerStatus.ACTIVE));
+
+        assertThat(service.authenticate(new VerifiedCustomerLogin(IDENTITY, false, NOW))).isEmpty();
+        assertThat(activationPort.activeCalls).isEqualTo(1);
     }
 
     @Test
@@ -123,7 +133,9 @@ class AuthenticateCustomerServiceTest {
         private int calls;
         private CustomerId customerId;
         private Instant activatedAt;
+        private int activeCalls;
         private Optional<CustomerAccess> result = Optional.empty();
+        private Optional<CustomerAccess> activeResult = Optional.empty();
 
         @Override
         public Optional<CustomerAccess> activatePending(CustomerId customerId, Instant activatedAt) {
@@ -131,6 +143,13 @@ class AuthenticateCustomerServiceTest {
             this.customerId = customerId;
             this.activatedAt = activatedAt;
             return result;
+        }
+
+        @Override
+        public Optional<CustomerAccess> confirmActive(CustomerId customerId) {
+            activeCalls++;
+            this.customerId = customerId;
+            return activeResult;
         }
     }
 }

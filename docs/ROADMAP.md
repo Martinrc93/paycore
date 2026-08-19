@@ -29,7 +29,7 @@ Roadmap técnico-funcional para orientar el trabajo de desarrollo. No contiene f
 - Revocación de sesiones cuando el Customer deja de estar activo.
 - Configuración y contratos operativos de Keycloak.
 
-Referencias: `openspec/changes/register-customer/`, `openspec/changes/authenticate-customer/`, `docs/runbooks/customer-registration.md` y `docs/runbooks/customer-authentication.md`.
+Referencias: `openspec/changes/archive/2026-08-14-register-customer/`, `openspec/changes/archive/2026-08-14-authenticate-customer/`, `docs/runbooks/customer-registration.md` y `docs/runbooks/customer-authentication.md`.
 
 ### Plataforma temporal — Completado
 
@@ -68,10 +68,10 @@ Referencia: `openspec/specs/system/utc-timezone/spec.md` y `docs/adr/ADR-0004_ U
 Referencia: `docs/adr/ADR-0003_ Use Double-Entry Ledger.md`.
 
 Implementación y evidencia: `docs/adr/ADR-0005_ Define Ledger Posting Model.md`,
-`openspec/changes/ledger-foundation/`, `docs/runbooks/ledger.md` y
+`openspec/changes/archive/2026-08-14-ledger-foundation/`, `docs/runbooks/ledger.md` y
 `docs/verification/ledger-foundation.md`.
 
-### 2. Cuentas y saldos — Pendiente
+### 2. Cuentas y saldos — Completado
 
 **Objetivo:** permitir que un Customer tenga cuentas operables y consultar saldos derivados del ledger.
 
@@ -85,6 +85,16 @@ Implementación y evidencia: `docs/adr/ADR-0005_ Define Ledger Posting Model.md`
 - Control de concurrencia para operaciones que compiten por el mismo saldo.
 
 **Pruebas mínimas:** aislamiento entre Customers, estados inválidos, saldo cero, alta concurrencia, consistencia después de rollback y reconstrucción desde ledger.
+
+Implementacion, runbook y evidencia: `src/main/java/dev/martin/paycore/wallet/`,
+`src/main/resources/db/migration/V5__create_wallet_accounts_and_balances.sql`,
+`docs/runbooks/wallet-balances.md` y
+`docs/verification/wallet-accounts-and-balances.md`. El cambio OpenSpec fue
+sincronizado y archivado en
+`openspec/changes/archive/2026-08-17-wallet-accounts-and-balances/`.
+La evidencia final registra 105 tests focalizados, 61 tests focalizados de
+PostgreSQL, 9 tests de arquitectura y 368 tests en la suite completa, todos con
+0 failures y 0 errors.
 
 ### 3. Transferencias internas — Pendiente
 

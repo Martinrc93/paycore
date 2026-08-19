@@ -6,6 +6,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.martin.paycore.identity.application.authentication.SessionLifetimePolicy;
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWallet;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletCommand;
+import dev.martin.paycore.wallet.domain.model.WalletCurrency;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -108,6 +111,9 @@ class OidcLoginSecurityTest {
 
     @Autowired
     JdbcClient jdbcClient;
+
+    @Autowired
+    ProvisionWallet walletProvisioning;
 
     @Autowired
     JdbcIndexedSessionRepository sessions;
@@ -232,6 +238,32 @@ class OidcLoginSecurityTest {
         assertThat(result.getResponse().getStatus()).isEqualTo(302);
         assertThat(requiredSessionCookie(result)).isNotNull();
         assertThat(customerStatus(customerId)).isEqualTo(CustomerStatus.ACTIVE);
+    }
+
+    @Test
+    void pendingCustomerWithVerifiedEmailHasNoSessionWhenWalletProvisioningFails() throws Exception {
+        UUID customerId = UUID.fromString("10000000-0000-0000-0000-000000000013");
+        linkCustomer(customerId, CustomerStatus.PENDING_VERIFICATION, PROVIDER.subject());
+        installWalletClaimFailureTrigger(customerId);
+        LoginStart login = loginStart();
+        Session unrelated = sessionRepository().createSession();
+        sessionRepository().save(unrelated);
+        try {
+            MvcResult result = callback(login, "failed-wallet-code");
+
+            assertSanitizedForbiddenWithoutAcceptedSession(result);
+        } finally {
+            jdbcClient.sql("DROP TRIGGER test_fail_wallet_oidc ON wallets").update();
+            jdbcClient.sql("DROP FUNCTION test_fail_wallet_oidc()").update();
+        }
+
+        assertThat(customerStatus(customerId)).isEqualTo(CustomerStatus.PENDING_VERIFICATION);
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM wallets WHERE customer_id=:id")
+                .param("id", customerId).query(Long.class).single()).isZero();
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM ledger_accounts WHERE name LIKE :prefix")
+                .param("prefix", "wallet:" + customerId + ":%").query(Long.class).single()).isZero();
+        assertThat(sessions.findById(repositorySessionId(login.cookie()))).isNull();
+        assertThat(sessions.findById(unrelated.getId())).isNotNull();
     }
 
     @Test
@@ -442,11 +474,27 @@ class OidcLoginSecurityTest {
                 .param("customerId", customerId)
                 .param("now", OffsetDateTime.ofInstant(AUTHENTICATED_AT, ZoneOffset.UTC))
                 .update();
+        if (status == CustomerStatus.ACTIVE) {
+            walletProvisioning.provision(new ProvisionWalletCommand(customerId, WalletCurrency.USD));
+        }
     }
 
     private CustomerStatus customerStatus(UUID customerId) {
         return CustomerStatus.valueOf(jdbcClient.sql("SELECT status FROM customers WHERE id=:id")
                 .param("id", customerId).query(String.class).single());
+    }
+
+    private void installWalletClaimFailureTrigger(UUID customerId) {
+        jdbcClient.sql("CREATE FUNCTION test_fail_wallet_oidc() RETURNS trigger "
+                + "LANGUAGE plpgsql AS $$ BEGIN "
+                + "IF NEW.customer_id = '" + customerId + "'::uuid THEN "
+                + "RAISE EXCEPTION 'forced wallet OIDC failure'; END IF; "
+                + "RETURN NEW; END; $$").update();
+        jdbcClient.sql("""
+                CREATE TRIGGER test_fail_wallet_oidc
+                BEFORE INSERT ON wallets
+                FOR EACH ROW EXECUTE FUNCTION test_fail_wallet_oidc()
+                """).update();
     }
 
     private static Map<String, String> queryParameters(String location) {

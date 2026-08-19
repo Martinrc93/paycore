@@ -9,6 +9,7 @@ import dev.martin.paycore.ledger.domain.model.FinancialTransaction;
 import dev.martin.paycore.ledger.domain.model.LedgerAccount;
 import dev.martin.paycore.ledger.domain.model.LedgerAccountId;
 import dev.martin.paycore.ledger.domain.model.LedgerAccountType;
+import dev.martin.paycore.ledger.domain.model.LedgerBalancePolicy;
 import dev.martin.paycore.ledger.domain.model.LedgerEntryDirection;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -26,8 +27,8 @@ class CompensateLedgerTransactionServiceTest {
         LedgerAccountId debit = LedgerAccountId.newId();
         LedgerAccountId credit = LedgerAccountId.newId();
         InMemoryStore store = new InMemoryStore();
-        store.accounts.put(debit, LedgerAccount.open(debit, LedgerAccountType.ASSET, "cash"));
-        store.accounts.put(credit, LedgerAccount.open(credit, LedgerAccountType.LIABILITY, "payable"));
+        store.accounts.put(debit, account(debit, LedgerAccountType.ASSET, "cash"));
+        store.accounts.put(credit, account(credit, LedgerAccountType.LIABILITY, "payable"));
         PostLedgerTransactionService posting = new PostLedgerTransactionService(store, store);
         FinancialTransaction original = FinancialTransaction.confirm(
                 Instant.parse("2026-08-13T12:00:00Z"), LocalDate.of(2026, 8, 13), "original", "op", List.of(
@@ -67,5 +68,9 @@ class CompensateLedgerTransactionServiceTest {
         public Optional<FinancialTransaction> findById(UUID id) {
             return Optional.ofNullable(transactions.get(id));
         }
+    }
+
+    private static LedgerAccount account(LedgerAccountId id, LedgerAccountType type, String name) {
+        return LedgerAccount.open(id, type, name, CurrencyCode.ARS, LedgerBalancePolicy.ALLOW_NEGATIVE);
     }
 }

@@ -8,6 +8,9 @@ import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import dev.martin.paycore.identity.infrastructure.session.ExpiredSessionCleanup;
 import dev.martin.paycore.identity.infrastructure.session.SpringSessionRevocationAdapter;
 import dev.martin.paycore.testsupport.ProtectedSecurityTestConfiguration;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletCommand;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletService;
+import dev.martin.paycore.wallet.domain.model.WalletCurrency;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.http.Cookie;
 import java.time.Duration;
@@ -109,6 +112,9 @@ class AuthenticationObservabilityTest {
 
     @Autowired
     ProtectedSessionSecurityTest.RecordingAuthorizedClientManager authorizedClientManager;
+
+    @Autowired
+    ProvisionWalletService provisioning;
 
     @BeforeEach
     void reset() {
@@ -314,6 +320,9 @@ class AuthenticationObservabilityTest {
                         """)
                 .param("id", customerId).param("email", "observability@example.test")
                 .param("status", status.name()).param("now", now).update();
+        if (status == CustomerStatus.ACTIVE) {
+            provisioning.provision(new ProvisionWalletCommand(customerId, WalletCurrency.USD));
+        }
     }
 
     private void assertCounter(String name, String tagName, String tagValue, double expected) {

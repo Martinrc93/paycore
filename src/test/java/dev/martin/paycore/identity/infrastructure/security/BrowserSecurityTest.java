@@ -7,6 +7,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import dev.martin.paycore.testsupport.ProtectedSecurityTestConfiguration;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletCommand;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletService;
+import dev.martin.paycore.wallet.domain.model.WalletCurrency;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.Cookie;
 import java.time.Instant;
@@ -105,6 +108,9 @@ class BrowserSecurityTest {
 
     @Autowired
     StateChanges stateChanges;
+
+    @Autowired
+    ProvisionWalletService provisioning;
 
     @BeforeEach
     void resetState() {
@@ -400,6 +406,7 @@ class BrowserSecurityTest {
                 .param("status", CustomerStatus.ACTIVE.name())
                 .param("now", OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC))
                 .update();
+        provisioning.provision(new ProvisionWalletCommand(customerId, WalletCurrency.USD));
     }
 
     private long sessionAttributeCount(String sessionId) {

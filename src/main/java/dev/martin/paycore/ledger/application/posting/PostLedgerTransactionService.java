@@ -35,8 +35,11 @@ public final class PostLedgerTransactionService {
         }
         List<LedgerLine> lines = command.lines().stream().map(line -> {
             LedgerAccountId accountId = new LedgerAccountId(line.accountId());
-            if (accounts.findById(accountId).filter(account -> account.status() == LedgerAccountStatus.OPEN).isEmpty()) {
-                throw new LedgerValidationException("Account " + line.accountId() + " is not open");
+            var account = accounts.findById(accountId)
+                    .filter(candidate -> candidate.status() == LedgerAccountStatus.OPEN)
+                    .orElseThrow(() -> new LedgerValidationException("Account " + line.accountId() + " is not open"));
+            if (account.currency() != line.currency()) {
+                throw new LedgerValidationException("Line currency must match account currency");
             }
             Money money = Money.of(line.amount(), line.currency());
             return new LedgerLine(line.sequence(), accountId, money, line.direction());

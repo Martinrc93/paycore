@@ -24,7 +24,7 @@ public final class AuthenticateCustomerService {
 
     private Optional<CustomerAccess> authenticate(CustomerAccess access, VerifiedCustomerLogin login) {
         if (access.status() == CustomerStatus.ACTIVE) {
-            return Optional.of(access);
+            return activationPort.confirmActive(access.customerId());
         }
         if (access.status() == CustomerStatus.PENDING_VERIFICATION && login.emailVerified()) {
             return activationPort.activatePending(access.customerId(), login.authenticatedAt());

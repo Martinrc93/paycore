@@ -1,5 +1,7 @@
 package dev.martin.paycore.ledger.infrastructure.persistence;
 
+import dev.martin.paycore.ledger.domain.model.CurrencyCode;
+import dev.martin.paycore.ledger.domain.model.LedgerBalancePolicy;
 import dev.martin.paycore.ledger.domain.model.LedgerAccountStatus;
 import dev.martin.paycore.ledger.domain.model.LedgerAccountType;
 import jakarta.persistence.Column;
@@ -28,6 +30,14 @@ class LedgerAccountEntity {
 
     @Column(nullable = false, length = 128)
     String name;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 3)
+    CurrencyCode currency;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "balance_policy", nullable = false, length = 16)
+    LedgerBalancePolicy balancePolicy;
 
     @Column(name = "created_at", nullable = false)
     Instant createdAt;

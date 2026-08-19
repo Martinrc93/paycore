@@ -4,6 +4,7 @@ import dev.martin.paycore.identity.application.authentication.CustomerAccess;
 import dev.martin.paycore.identity.application.authentication.ResolveCustomerAccess;
 import dev.martin.paycore.identity.domain.model.CustomerId;
 import dev.martin.paycore.identity.application.authentication.SessionLifetimePolicy;
+import dev.martin.paycore.wallet.application.query.WalletAccess;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,13 +25,15 @@ public final class CustomerOidcAuthenticationSuccessHandler implements Authentic
     private final SessionLifetimePolicy lifetimePolicy;
     private final String successUri;
     private final ResolveCustomerAccess customerAccess;
+    private final WalletAccess wallets;
 
     CustomerOidcAuthenticationSuccessHandler(Clock clock, SessionLifetimePolicy lifetimePolicy, String successUri,
-            ResolveCustomerAccess customerAccess) {
+            ResolveCustomerAccess customerAccess, WalletAccess wallets) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.lifetimePolicy = Objects.requireNonNull(lifetimePolicy, "lifetimePolicy");
         this.successUri = Objects.requireNonNull(successUri, "successUri");
         this.customerAccess = Objects.requireNonNull(customerAccess, "customerAccess");
+        this.wallets = Objects.requireNonNull(wallets, "wallets");
     }
 
     @Override
@@ -69,9 +72,15 @@ public final class CustomerOidcAuthenticationSuccessHandler implements Authentic
         if (!(authentication.getPrincipal() instanceof CustomerPrincipal principal)) {
             return false;
         }
-        return customerAccess.resolve(new CustomerId(principal.customerId()))
-                .map(CustomerAccess::isActive)
-                .orElse(false);
+        CustomerId customerId = new CustomerId(principal.customerId());
+        try {
+            return customerAccess.resolve(customerId)
+                    .filter(CustomerAccess::isActive)
+                    .filter(ignored -> wallets.confirmCompleteUsdWallet(customerId.value()).isPresent())
+                    .isPresent();
+        } catch (RuntimeException failure) {
+            return false;
+        }
     }
 
     private static long roundUpToSeconds(Duration duration) {

@@ -1,5 +1,6 @@
 package dev.martin.paycore.ledger.infrastructure.persistence;
 
+import dev.martin.paycore.ledger.application.port.out.LedgerBalanceStore;
 import dev.martin.paycore.ledger.application.port.out.LedgerMovementQueryPort;
 import dev.martin.paycore.ledger.application.port.out.LedgerTransactionStore;
 import dev.martin.paycore.ledger.application.posting.FinancialPostingResult;
@@ -23,16 +24,19 @@ public class LedgerTransactionPersistenceAdapter implements LedgerTransactionSto
     private final LedgerTransactionJpaRepository transactions;
     private final LedgerTransactionLineJpaRepository lines;
     private final LedgerPostIdempotencyJpaRepository idempotency;
+    private final LedgerBalanceStore balances;
     private final JdbcTemplate jdbcTemplate;
 
     public LedgerTransactionPersistenceAdapter(
             LedgerTransactionJpaRepository transactions,
             LedgerTransactionLineJpaRepository lines,
             LedgerPostIdempotencyJpaRepository idempotency,
+            LedgerBalanceStore balances,
             JdbcTemplate jdbcTemplate) {
         this.transactions = transactions;
         this.lines = lines;
         this.idempotency = idempotency;
+        this.balances = balances;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -54,6 +58,7 @@ public class LedgerTransactionPersistenceAdapter implements LedgerTransactionSto
                     .orElseThrow(() -> new IllegalStateException("Idempotency result has no transaction"));
             return new FinancialPostingResult(original, true);
         }
+        balances.lockAndValidate(transaction);
         for (LedgerLine line : transaction.lines()) {
             LedgerTransactionLineEntity entity = toEntity(transaction, line);
             jdbcTemplate.update("""
@@ -72,6 +77,7 @@ public class LedgerTransactionPersistenceAdapter implements LedgerTransactionSto
                 """, candidate.id, candidate.postedAt.atOffset(java.time.ZoneOffset.UTC), candidate.valueDate,
                 candidate.idempotencyKey, candidate.operationReference, candidate.currency.name(),
                 candidate.reversalOf, candidate.correctionOf);
+        balances.apply(transaction);
         if (idempotency.complete(transaction.idempotencyKey(), transaction.id()) != 1) {
             throw new IllegalStateException("Idempotency claim could not be completed");
         }

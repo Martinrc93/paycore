@@ -65,7 +65,7 @@ class RegistrationControllerTest {
     @BeforeEach
     void cleanDatabase() {
         KEYCLOAK_CALLS.set(0);
-        jdbcClient.sql("TRUNCATE TABLE registration_operations, external_identities, customers, registration_rate_limits")
+        jdbcClient.sql("TRUNCATE TABLE wallets, registration_operations, external_identities, customers, registration_rate_limits")
                 .update();
     }
 

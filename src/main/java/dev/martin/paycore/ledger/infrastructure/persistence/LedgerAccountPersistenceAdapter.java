@@ -32,7 +32,8 @@ public class LedgerAccountPersistenceAdapter implements LedgerAccountStore {
 
     private static LedgerAccount toDomain(LedgerAccountEntity entity) {
         return new LedgerAccount(
-                new LedgerAccountId(entity.id), entity.type, entity.status, entity.name);
+                new LedgerAccountId(entity.id), entity.type, entity.status, entity.name,
+                entity.currency, entity.balancePolicy);
     }
 
     private LedgerAccountEntity toEntity(LedgerAccount account) {
@@ -41,6 +42,8 @@ public class LedgerAccountPersistenceAdapter implements LedgerAccountStore {
         entity.type = account.type();
         entity.status = account.status();
         entity.name = account.name();
+        entity.currency = account.currency();
+        entity.balancePolicy = account.balancePolicy();
         entity.createdAt = clock.instant();
         return entity;
     }

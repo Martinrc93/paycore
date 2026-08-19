@@ -57,7 +57,7 @@ class RegistrationWorkAdapterTest {
 
     @BeforeEach
     void prepareOperation() {
-        jdbcClient.sql("TRUNCATE TABLE registration_operations, external_identities, customers, registration_rate_limits")
+        jdbcClient.sql("TRUNCATE TABLE wallets, registration_operations, external_identities, customers, registration_rate_limits")
                 .update();
         new RegisterCustomerService(
                 acceptanceAdapter,

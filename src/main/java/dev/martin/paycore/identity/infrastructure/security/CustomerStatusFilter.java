@@ -4,6 +4,7 @@ import dev.martin.paycore.identity.application.authentication.CustomerAccess;
 import dev.martin.paycore.identity.application.authentication.ResolveCustomerAccess;
 import dev.martin.paycore.identity.application.port.out.SessionRevocationPort;
 import dev.martin.paycore.identity.domain.model.CustomerId;
+import dev.martin.paycore.wallet.application.query.WalletAccess;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,13 +19,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public final class CustomerStatusFilter extends OncePerRequestFilter {
 
     private final ResolveCustomerAccess customerAccess;
+    private final WalletAccess wallets;
     private final SessionRevocationPort sessions;
     private final RequestMatcher publicRequests;
     private final AuthenticationMetrics metrics;
 
-    public CustomerStatusFilter(ResolveCustomerAccess customerAccess, SessionRevocationPort sessions,
+    public CustomerStatusFilter(ResolveCustomerAccess customerAccess, WalletAccess wallets,
+            SessionRevocationPort sessions,
             RequestMatcher publicRequests, AuthenticationMetrics metrics) {
         this.customerAccess = customerAccess;
+        this.wallets = wallets;
         this.sessions = sessions;
         this.publicRequests = publicRequests;
         this.metrics = metrics;
@@ -50,7 +54,10 @@ public final class CustomerStatusFilter extends OncePerRequestFilter {
         }
 
         CustomerId customerId = new CustomerId(principal.customerId());
-        boolean active = customerAccess.resolve(customerId).filter(CustomerAccess::isActive).isPresent();
+        boolean active = customerAccess.resolve(customerId)
+                .filter(CustomerAccess::isActive)
+                .filter(ignored -> hasCompleteWallet(customerId))
+                .isPresent();
         if (!active) {
             metrics.customerAccessDenied();
             sessions.revokeAll(customerId);
@@ -59,6 +66,14 @@ public final class CustomerStatusFilter extends OncePerRequestFilter {
             return;
         }
         filterChain.doFilter(request, response);
+    }
+
+    private boolean hasCompleteWallet(CustomerId customerId) {
+        try {
+            return wallets.confirmCompleteUsdWallet(customerId.value()).isPresent();
+        } catch (RuntimeException failure) {
+            return false;
+        }
     }
 
     private static void invalidate(HttpSession session) {

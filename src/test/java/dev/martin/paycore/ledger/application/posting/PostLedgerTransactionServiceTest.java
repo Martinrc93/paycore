@@ -9,6 +9,7 @@ import dev.martin.paycore.ledger.domain.model.CurrencyCode;
 import dev.martin.paycore.ledger.domain.model.LedgerAccount;
 import dev.martin.paycore.ledger.domain.model.LedgerAccountId;
 import dev.martin.paycore.ledger.domain.model.LedgerAccountType;
+import dev.martin.paycore.ledger.domain.model.LedgerBalancePolicy;
 import dev.martin.paycore.ledger.domain.model.LedgerValidationException;
 import dev.martin.paycore.ledger.domain.model.LedgerEntryDirection;
 import java.time.Instant;
@@ -29,8 +30,8 @@ class PostLedgerTransactionServiceTest {
 
     @Test
     void postsWhenAllReferencedAccountsAreOpen() {
-        accounts.add(LedgerAccount.open(debitAccount, LedgerAccountType.ASSET, "cash"));
-        accounts.add(LedgerAccount.open(creditAccount, LedgerAccountType.LIABILITY, "payable"));
+        accounts.add(account(debitAccount, LedgerAccountType.ASSET, "cash"));
+        accounts.add(account(creditAccount, LedgerAccountType.LIABILITY, "payable"));
 
         FinancialPostingResult result = service.post(command("key-1"));
 
@@ -41,8 +42,8 @@ class PostLedgerTransactionServiceTest {
 
     @Test
     void rejectsBlockedAccountBeforePersistence() {
-        accounts.add(LedgerAccount.open(debitAccount, LedgerAccountType.ASSET, "cash").block());
-        accounts.add(LedgerAccount.open(creditAccount, LedgerAccountType.LIABILITY, "payable"));
+        accounts.add(account(debitAccount, LedgerAccountType.ASSET, "cash").block());
+        accounts.add(account(creditAccount, LedgerAccountType.LIABILITY, "payable"));
 
         assertThatThrownBy(() -> service.post(command("key-1")))
                 .isInstanceOf(LedgerValidationException.class)
@@ -51,9 +52,31 @@ class PostLedgerTransactionServiceTest {
     }
 
     @Test
+    void rejectsLineWhoseCurrencyDiffersFromReferencedAccount() {
+        accounts.add(account(debitAccount, LedgerAccountType.ASSET, "cash"));
+        accounts.add(account(creditAccount, LedgerAccountType.LIABILITY, "payable"));
+
+        PostLedgerTransactionCommand mismatched = new PostLedgerTransactionCommand(
+                Instant.parse("2026-08-13T12:00:00Z"),
+                LocalDate.of(2026, 8, 13),
+                "currency-mismatch",
+                "operation-1",
+                java.util.List.of(
+                        new PostingLineCommand(1, debitAccount.value(), "10.00", CurrencyCode.USD,
+                                LedgerEntryDirection.DEBIT),
+                        new PostingLineCommand(2, creditAccount.value(), "10.00", CurrencyCode.USD,
+                                LedgerEntryDirection.CREDIT)));
+
+        assertThatThrownBy(() -> service.post(mismatched))
+                .isInstanceOf(LedgerValidationException.class)
+                .hasMessageContaining("currency");
+        assertThat(transactions.saved).isEmpty();
+    }
+
+    @Test
     void equivalentRetryUsesOriginalTransaction() {
-        accounts.add(LedgerAccount.open(debitAccount, LedgerAccountType.ASSET, "cash"));
-        accounts.add(LedgerAccount.open(creditAccount, LedgerAccountType.LIABILITY, "payable"));
+        accounts.add(account(debitAccount, LedgerAccountType.ASSET, "cash"));
+        accounts.add(account(creditAccount, LedgerAccountType.LIABILITY, "payable"));
 
         FinancialPostingResult first = service.post(command("key-1"));
         FinancialPostingResult second = service.post(command("key-1"));
@@ -65,8 +88,8 @@ class PostLedgerTransactionServiceTest {
 
     @Test
     void rejectsSameKeyWithDifferentContent() {
-        accounts.add(LedgerAccount.open(debitAccount, LedgerAccountType.ASSET, "cash"));
-        accounts.add(LedgerAccount.open(creditAccount, LedgerAccountType.LIABILITY, "payable"));
+        accounts.add(account(debitAccount, LedgerAccountType.ASSET, "cash"));
+        accounts.add(account(creditAccount, LedgerAccountType.LIABILITY, "payable"));
 
         service.post(command("key-1"));
 
@@ -77,8 +100,8 @@ class PostLedgerTransactionServiceTest {
 
     @Test
     void equivalentNumericFormattingDoesNotConflictOnRetry() {
-        accounts.add(LedgerAccount.open(debitAccount, LedgerAccountType.ASSET, "cash"));
-        accounts.add(LedgerAccount.open(creditAccount, LedgerAccountType.LIABILITY, "payable"));
+        accounts.add(account(debitAccount, LedgerAccountType.ASSET, "cash"));
+        accounts.add(account(creditAccount, LedgerAccountType.LIABILITY, "payable"));
 
         service.post(commandWithAmount("key-equivalent", "10.00"));
         FinancialPostingResult replay = service.post(commandWithAmount("key-equivalent", "10"));
@@ -89,6 +112,10 @@ class PostLedgerTransactionServiceTest {
 
     private PostLedgerTransactionCommand command(String key) {
         return commandWithAmount(key, "10.00");
+    }
+
+    private static LedgerAccount account(LedgerAccountId id, LedgerAccountType type, String name) {
+        return LedgerAccount.open(id, type, name, CurrencyCode.ARS, LedgerBalancePolicy.ALLOW_NEGATIVE);
     }
 
     private PostLedgerTransactionCommand commandWithAmount(String key, String amount) {

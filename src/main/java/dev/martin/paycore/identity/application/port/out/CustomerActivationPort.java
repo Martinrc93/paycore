@@ -8,4 +8,6 @@ import java.util.Optional;
 public interface CustomerActivationPort {
 
     Optional<CustomerAccess> activatePending(CustomerId customerId, Instant activatedAt);
+
+    Optional<CustomerAccess> confirmActive(CustomerId customerId);
 }

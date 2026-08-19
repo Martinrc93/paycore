@@ -70,6 +70,10 @@ class VerifiedCustomerMigrationTest {
         assertThat(status(BLOCKED_CUSTOMER)).isEqualTo("BLOCKED");
         assertThat(sessionCount(ACTIVE_CUSTOMER)).isZero();
         assertThat(sessionCount(SUSPENDED_CUSTOMER)).isEqualTo(1);
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM wallets WHERE customer_id=:id")
+                .param("id", ACTIVE_CUSTOMER).query(Long.class).single()).isZero();
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM ledger_account_balances")
+                .query(Long.class).single()).isZero();
     }
 
     private void insertCustomer(UUID id, String status, long version) {

@@ -37,6 +37,9 @@ class CustomerAccessPersistenceAdapterTest {
     CustomerAccessPersistenceAdapter adapter;
 
     @Autowired
+    WalletProvisioningCustomerActivationAdapter activationAdapter;
+
+    @Autowired
     JdbcClient jdbcClient;
 
     @BeforeEach
@@ -87,10 +90,12 @@ class CustomerAccessPersistenceAdapterTest {
         assertThat(adapter.findByExternalIdentity(new ExternalIdentity(
                 "https://issuer.example/realms/paycore", "pending-subject")))
                 .hasValueSatisfying(access -> assertThat(access.status()).isEqualTo(CustomerStatus.PENDING_VERIFICATION));
-        assertThat(adapter.activatePending(pending, OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant()))
+        assertThat(activationAdapter.activatePending(pending, OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant()))
                 .hasValueSatisfying(access -> assertThat(access.status()).isEqualTo(CustomerStatus.ACTIVE));
         assertThat(adapter.findByCustomerId(pending).orElseThrow().status()).isEqualTo(CustomerStatus.ACTIVE);
         assertThat(version(pending)).isEqualTo(1L);
+        assertThat(walletCount(pending)).isEqualTo(1L);
+        assertThat(walletAccountCount(pending)).isEqualTo(2L);
     }
 
     @Test
@@ -98,10 +103,28 @@ class CustomerAccessPersistenceAdapterTest {
         CustomerId pending = customer(6, CustomerStatus.PENDING_VERIFICATION);
         var activationAt = OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant();
 
-        assertThat(adapter.activatePending(pending, activationAt)).isPresent();
-        assertThat(adapter.activatePending(pending, activationAt.plusSeconds(1)))
+        assertThat(activationAdapter.activatePending(pending, activationAt)).isPresent();
+        assertThat(activationAdapter.activatePending(pending, activationAt.plusSeconds(1)))
                 .hasValueSatisfying(access -> assertThat(access.status()).isEqualTo(CustomerStatus.ACTIVE));
         assertThat(version(pending)).isEqualTo(1L);
+        assertThat(walletCount(pending)).isEqualTo(1L);
+        assertThat(walletAccountCount(pending)).isEqualTo(2L);
+    }
+
+    @Test
+    void activeCustomerWithoutACompleteWalletCannotBeConfirmedForAuthentication() {
+        CustomerId active = customer(10, CustomerStatus.ACTIVE);
+
+        assertThat(activationAdapter.confirmActive(active)).isEmpty();
+    }
+
+    @Test
+    void activeCustomerWithACompleteWalletCanBeConfirmedForAuthentication() {
+        CustomerId active = customer(11, CustomerStatus.PENDING_VERIFICATION);
+        activationAdapter.activatePending(active, OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant());
+
+        assertThat(activationAdapter.confirmActive(active))
+                .hasValueSatisfying(access -> assertThat(access.status()).isEqualTo(CustomerStatus.ACTIVE));
     }
 
     @Test
@@ -119,6 +142,27 @@ class CustomerAccessPersistenceAdapterTest {
 
         assertThat(adapter.findByCustomerId(pending).orElseThrow().status()).isEqualTo(CustomerStatus.ACTIVE);
         assertThat(version(pending)).isEqualTo(1L);
+        assertThat(walletCount(pending)).isEqualTo(1L);
+        assertThat(walletAccountCount(pending)).isEqualTo(2L);
+    }
+
+    @Test
+    void rollsBackCustomerActivationWalletAndAccountsWhenProvisioningFails() {
+        CustomerId pending = customer(9, CustomerStatus.PENDING_VERIFICATION);
+        installWalletClaimFailureTrigger(pending);
+        try {
+            assertThat(activationAdapter.activatePending(
+                    pending, OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant())).isEmpty();
+        } finally {
+            jdbcClient.sql("DROP TRIGGER test_fail_wallet_activation ON wallets").update();
+            jdbcClient.sql("DROP FUNCTION test_fail_wallet_activation()").update();
+        }
+
+        assertThat(adapter.findByCustomerId(pending).orElseThrow().status())
+                .isEqualTo(CustomerStatus.PENDING_VERIFICATION);
+        assertThat(version(pending)).isZero();
+        assertThat(walletCount(pending)).isZero();
+        assertThat(walletAccountCount(pending)).isZero();
     }
 
     @Test
@@ -151,7 +195,8 @@ class CustomerAccessPersistenceAdapterTest {
     private Object activateAfter(CountDownLatch start, CustomerId customerId) {
         try {
             start.await();
-            return adapter.activatePending(customerId, OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant());
+            return activationAdapter.activatePending(
+                    customerId, OffsetDateTime.parse("2026-08-14T12:00:00Z").toInstant());
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
@@ -178,6 +223,33 @@ class CustomerAccessPersistenceAdapterTest {
     private long version(CustomerId customerId) {
         return jdbcClient.sql("SELECT version FROM customers WHERE id=:id")
                 .param("id", customerId.value()).query(Long.class).single();
+    }
+
+    private long walletCount(CustomerId customerId) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM wallets WHERE customer_id=:id")
+                .param("id", customerId.value()).query(Long.class).single();
+    }
+
+    private long walletAccountCount(CustomerId customerId) {
+        return jdbcClient.sql("""
+                SELECT COUNT(*)
+                  FROM ledger_accounts a
+                  JOIN wallets w ON a.id IN (w.available_account_id, w.reserved_account_id)
+                 WHERE w.customer_id=:id
+                """).param("id", customerId.value()).query(Long.class).single();
+    }
+
+    private void installWalletClaimFailureTrigger(CustomerId customerId) {
+        jdbcClient.sql("CREATE FUNCTION test_fail_wallet_activation() RETURNS trigger "
+                + "LANGUAGE plpgsql AS $$ BEGIN "
+                + "IF NEW.customer_id = '" + customerId.value() + "'::uuid THEN "
+                + "RAISE EXCEPTION 'forced wallet claim failure'; END IF; "
+                + "RETURN NEW; END; $$").update();
+        jdbcClient.sql("""
+                CREATE TRIGGER test_fail_wallet_activation
+                BEFORE INSERT ON wallets
+                FOR EACH ROW EXECUTE FUNCTION test_fail_wallet_activation()
+                """).update();
     }
 
     private CustomerId customer(long id, CustomerStatus status) {

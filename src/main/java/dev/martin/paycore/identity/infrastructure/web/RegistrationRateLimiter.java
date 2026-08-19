@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 public class RegistrationRateLimiter {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
+    private static final long RETRY_AFTER_SECONDS = 60;
     private final JdbcClient jdbcClient;
     private final byte[] secret;
     private final Clock clock;
@@ -39,12 +40,12 @@ public class RegistrationRateLimiter {
         Instant now = clock.instant();
         Instant windowStart = now.truncatedTo(ChronoUnit.MINUTES);
         Instant expiresAt = windowStart.plus(2, ChronoUnit.MINUTES);
-        incrementAndCheck("source:" + source, windowStart, expiresAt, sourceLimit, now);
-        incrementAndCheck("email:" + email.value(), windowStart, expiresAt, emailLimit, now);
+        incrementAndCheck("source:" + source, windowStart, expiresAt, sourceLimit);
+        incrementAndCheck("email:" + email.value(), windowStart, expiresAt, emailLimit);
     }
 
     private void incrementAndCheck(String rawBucket, Instant windowStart, Instant expiresAt,
-            int limit, Instant now) {
+            int limit) {
         int attempts = jdbcClient.sql("""
                         INSERT INTO registration_rate_limits (bucket_key, window_start, attempts, expires_at)
                         VALUES (:bucketKey, :windowStart, 1, :expiresAt)
@@ -59,7 +60,7 @@ public class RegistrationRateLimiter {
                 .query(Integer.class)
                 .single();
         if (attempts > limit) {
-            throw new RateLimitExceededException(Math.max(1, 60 - now.getEpochSecond() % 60));
+            throw new RateLimitExceededException(RETRY_AFTER_SECONDS);
         }
     }
 

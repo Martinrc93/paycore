@@ -6,6 +6,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import dev.martin.paycore.identity.domain.model.CustomerStatus;
 import dev.martin.paycore.testsupport.ProtectedSecurityTestConfiguration;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletCommand;
+import dev.martin.paycore.wallet.application.provisioning.ProvisionWalletService;
+import dev.martin.paycore.wallet.domain.model.WalletCurrency;
 import jakarta.servlet.http.Cookie;
 import java.time.Clock;
 import java.time.Duration;
@@ -86,6 +89,9 @@ public class ProtectedSessionSecurityTest {
 
     @Autowired
     RecordingAuthorizedClientManager authorizedClientManager;
+
+    @Autowired
+    ProvisionWalletService provisioning;
 
     @BeforeEach
     void resetState() {
@@ -308,6 +314,9 @@ public class ProtectedSessionSecurityTest {
                 .param("status", status.name())
                 .param("now", OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC))
                 .update();
+        if (status == CustomerStatus.ACTIVE) {
+            provisioning.provision(new ProvisionWalletCommand(customerId, WalletCurrency.USD));
+        }
     }
 
     private MvcResult perform(Cookie cookie) throws Exception {
